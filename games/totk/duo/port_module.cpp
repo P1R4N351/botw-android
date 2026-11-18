@@ -11,8 +11,17 @@
 // MIT; runtime/companion_actions.c behind them). This file only forwards: the rules, the gate, the one request at a
 // time and every game call stay the runtime's, on the game's frame-end thread. Without them (a runtime that offers
 // none) the module is bound to nothing and shows its actions unavailable, as in Eden Duo.
+//
+// Guest writes (DUO_MODULE_WRITES, Breath of the Wild): the module's write-batch extension (its Champion powers
+// switches, botw_champion_toggle.h) is configured with the port's writer instead of the runtime's. The runtime's
+// write_batch stores through Core::Memory, which the shim refuses (shim/system.cpp WriteBlock: this companion writes no
+// guest memory of its own); the port hands the batch, op for op, to the MIT runtime's guarded write (DuoPort ABI 4,
+// duo_port.h: heap only, at most 8 bytes per store, every expect compared, all or none, at the game's next frame).
+// Without that service the module gets no writer and shows its switches read-only. Tears of the Kingdom's module has
+// no write extension and is unaffected.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <format>
@@ -138,6 +147,43 @@ void TappedConfigure(void* instance, const EdenDsmodHostExtensions* host) {
 }
 #endif
 
+#if DUO_MODULE_WRITES
+const EdenDsmodModuleWriteExtensions* g_module_writes = nullptr;
+EdenDsmodModuleWriteExtensions g_tapped_writes{};
+const DuoPort* WritePort() {
+    const DuoPort* const port = Duo::Port();
+    return port != nullptr && port->guarded_write != nullptr ? port : nullptr;
+}
+// Eden's write_batch semantics over the port's guarded write: the same ops in the same order. A store without expect
+// bytes or of more than DUO_PORT_WRITE_MAX_BYTES is refused here (Eden allows both; the module sends neither).
+EdenDsmodBool PortWriteBatch(void*, const EdenDsmodWriteOp* ops, uint32_t count) {
+    const DuoPort* const port = WritePort();
+    if (port == nullptr || ops == nullptr || count == 0 || count > DUO_PORT_WRITE_MAX_OPS) {
+        return EDEN_DSMOD_FALSE;
+    }
+    std::array<DuoPortWrite, DUO_PORT_WRITE_MAX_OPS> stores{};
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& op = ops[i];
+        if (op.reserved != 0 || op.size == 0 || op.size > DUO_PORT_WRITE_MAX_BYTES || op.expect == nullptr ||
+            op.value == nullptr) {
+            return EDEN_DSMOD_FALSE;
+        }
+        stores[i] = {op.address, op.size, 0, op.expect, op.value};
+    }
+    return port->guarded_write(stores.data(), count) != 0 ? EDEN_DSMOD_TRUE : EDEN_DSMOD_FALSE;
+}
+const EdenDsmodHostWriteApi g_port_writes{EDEN_DSMOD_WRITE_EXT_VERSION, sizeof(EdenDsmodHostWriteApi),
+                                          EDEN_DSMOD_WRITE_EXT_HASH, nullptr, &PortWriteBatch};
+void TappedWriteConfigure(void* instance, const EdenDsmodHostWriteApi*) {
+    const bool offered = WritePort() != nullptr;
+    if (offered) {
+        g_module_writes->configure(instance, &g_port_writes);
+    }
+    LOG_INFO(Core, "DSMod module: guest writes {}",
+             offered ? "through the runtime's guarded write (DuoPort ABI 4)" : "not offered by this runtime; none");
+}
+#endif
+
 } // namespace
 
 void SetModuleCacheDirectory(const std::filesystem::path&) {}
@@ -206,7 +252,8 @@ std::unique_ptr<GameModule> GameModule::Load(FileSys::VirtualDir assets, u64 tit
         // null answer, no font of the module's own; anything else must match this build's struct exactly. The Tears of
         // the Kingdom module decodes the game's Rodin font this way; the Breath of the Wild module defines no
         // eden_dsmod_get_font_extensions (DUO_MODULE_FONT, CMakeLists.txt, says whether the linked module does: the
-        // dlsym of Eden's loader). Neither exports a save, write, data or texture extension.
+        // dlsym of Eden's loader). Neither exports a save, data or texture extension; the write extension below is
+        // Breath of the Wild's (DUO_MODULE_WRITES).
 #if DUO_MODULE_FONT
         {
             const auto* const font =
@@ -217,6 +264,24 @@ std::unique_ptr<GameModule> GameModule::Load(FileSys::VirtualDir assets, u64 tit
                 throw std::runtime_error("incompatible dual-screen font extensions");
             }
             loaded->font_extensions = font;
+        }
+#endif
+#if DUO_MODULE_WRITES
+        {
+            const auto* const writes =
+                eden_dsmod_get_write_extensions(EDEN_DSMOD_WRITE_EXT_VERSION, EDEN_DSMOD_WRITE_EXT_HASH);
+            if (writes != nullptr &&
+                (writes->version != EDEN_DSMOD_WRITE_EXT_VERSION ||
+                 writes->struct_size != sizeof(EdenDsmodModuleWriteExtensions) ||
+                 writes->abi_hash != EDEN_DSMOD_WRITE_EXT_HASH || !writes->configure)) {
+                throw std::runtime_error("incompatible dual-screen write extensions");
+            }
+            if (writes != nullptr) {
+                g_module_writes = writes;
+                g_tapped_writes = *writes;
+                g_tapped_writes.configure = TappedWriteConfigure;
+                loaded->write_extensions = &g_tapped_writes;
+            }
         }
 #endif
         LOG_INFO(Core, "DSMod module: loaded {} for title {} build {} (built in)",

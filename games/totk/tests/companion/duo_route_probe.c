@@ -2,7 +2,9 @@
    runtime/companion_jni.c as the app links them, a stand-in companion host (fake_duo_host.c, opened through
    TOTK_DUO_LIB as the app opens libduo_host.so) and stubs for what lies below them (companion_actions.c, the game).
    The probe calls through the table the host is handed and checks that each pointer reaches its runtime function with
-   its arguments and gates: TOTK_COMPANION=0, the paused game, invalid requests, result()'s cap. It also checks the
+   its arguments and gates: TOTK_COMPANION=0, the paused game, invalid requests, result()'s cap, the sages' key (Tears of
+   the Kingdom), and the guarded write (ABI 4, Breath of the Wild only): heap bounds, sizes, compare-then-write, all or
+   none, applied only at a frame and withdrawn when no frame comes. It also checks the
    build id the host is given (main's note, or Breath of the Wild's known id when main has none) and the common state's
    hand-over. Linux only (as the app: ELF weak symbols, dlopen); tests/test_companion_gate.py builds it twice, for Tears
    of the Kingdom and with -DGAME_BOTW.
@@ -15,6 +17,7 @@
 #include "../../duo/duo_port.h"
 #include <assert.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <jni.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -29,7 +32,13 @@ static struct { char action[32], category[32], actor[64]; int slot, partition; l
 static const char RESULT[] = "{\"seq\":42,\"state\":\"done\",\"reason\":\"\"}";
 
 int runtime_android_game_paused(void) { return atomic_load(&paused); }   /* android_pause.h, ANDROID_PAUSE_EXTERN */
-int host_safe_read(uint64_t a, void *out, size_t n) { (void)a; memset(out, 0, n); return 1; }
+static uint8_t heap[256];   /* the guest heap of the guarded write's checks (services.c's, below for Breath of the Wild) */
+int host_safe_read(uint64_t a, void *out, size_t n) {   /* the heap reads back; anything else is zeros */
+    const uint64_t base = (uint64_t)(uintptr_t)heap;
+    if (a >= base && a - base <= sizeof heap && n <= sizeof heap - (a - base)) memcpy(out, heap + (a - base), n);
+    else memset(out, 0, n);
+    return 1;
+}
 uint64_t host_now_ns(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -66,6 +75,13 @@ int companion_view(uintptr_t main_base, companion_read_fn rd, int key, int slot,
     return 1;
 }
 /* Five offered, as a buggy rule set might: the port passes on three. */
+static _Atomic int sage_calls, last_sage = -1;
+unsigned companion_sage_actions(int sage, CompanionAction out[3]) {
+    atomic_fetch_add(&sage_calls, 1);
+    atomic_store(&last_sage, sage);
+    out[0] = (CompanionAction){"summonSage", 0, "notAvailableYet"};
+    return 1;
+}
 unsigned companion_item_actions(int key, const CompanionView *v, CompanionAction out[3]) {
     assert(v && v->ident == 0x1234);
     atomic_fetch_add(&item_actions_calls, 1);
@@ -97,7 +113,68 @@ size_t companion_result(int seq, CompanionBuf *out) {
 }
 
 #define COUNTS (atomic_load(&views) + atomic_load(&item_actions_calls) + atomic_load(&action_state_calls) + \
-                atomic_load(&gen_calls) + atomic_load(&requests) + atomic_load(&results) + atomic_load(&modules))
+                atomic_load(&gen_calls) + atomic_load(&requests) + atomic_load(&results) + atomic_load(&modules) + \
+                atomic_load(&sage_calls))
+
+#ifdef GAME_BOTW
+/* services.c's guest heap, here a plain buffer */
+uint64_t runtime_heap_base(void) { return (uint64_t)(uintptr_t)heap; }
+void runtime_guest_committed(uint64_t *heap_bytes, uint64_t *alias_mapped) { *heap_bytes = sizeof heap; *alias_mapped = 0; }
+static const DuoPort *write_port;
+static const DuoPortWrite *write_ops;
+static unsigned write_count;
+static _Atomic int write_result = -1;
+static void *writer(void *arg) {
+    (void)arg;
+    atomic_store(&write_result, write_port->guarded_write(write_ops, write_count));
+    return NULL;
+}
+/* guarded_write from another thread while the game presents frames (or not): its result */
+static int write_with_frames(const DuoPort *port, const DuoPortWrite *ops, unsigned count, int frames) {
+    pthread_t t;
+    write_port = port; write_ops = ops; write_count = count; atomic_store(&write_result, -1);
+    assert(!pthread_create(&t, NULL, writer, NULL));
+    for (int i = 0; atomic_load(&write_result) < 0; i++) {
+        struct timespec pause = {0, 2000000};
+        nanosleep(&pause, NULL);
+        if (frames && i > 5) runtime_duo_frame();
+    }
+    pthread_join(t, NULL);
+    return atomic_load(&write_result);
+}
+static void check_writes(const DuoPort *port) {
+    assert(port->guarded_write);
+    uint8_t one = 1, zero = 0, nine = 9;
+    uint64_t item = 0x1122334455667788ull;
+    memcpy(heap + 0x40, &item, 8); heap[0x24] = 1; heap[0x18] = 9;
+    /* bounds and shapes: refused at once, nothing stored */
+    DuoPortWrite bad[] = {{(uint64_t)(uintptr_t)heap + 255, 2, 0, &one, &zero},   /* crosses the heap's end */
+                          {(uint64_t)(uintptr_t)heap - 1, 1, 0, &one, &zero}};    /* before it */
+    assert(!port->guarded_write(&bad[0], 1) && !port->guarded_write(&bad[1], 1));
+    DuoPortWrite big = {(uint64_t)(uintptr_t)heap, 9, 0, heap, heap};
+    assert(!port->guarded_write(&big, 1));
+    DuoPortWrite blind = {(uint64_t)(uintptr_t)heap + 0x24, 1, 0, NULL, &zero};   /* compare-then-write only */
+    assert(!port->guarded_write(&blind, 1));
+    DuoPortWrite many[DUO_PORT_WRITE_MAX_OPS + 1];
+    for (unsigned i = 0; i <= DUO_PORT_WRITE_MAX_OPS; i++) many[i] = (DuoPortWrite){(uint64_t)(uintptr_t)heap + i, 1, 0, heap + i, heap + i};
+    assert(!port->guarded_write(many, DUO_PORT_WRITE_MAX_OPS + 1) && !port->guarded_write(many, 0));
+    assert(heap[0x24] == 1);
+    /* the Champion switch's batch: the slot still points at the item, the item is a key item, the byte as seen */
+    DuoPortWrite batch3[] = {{(uint64_t)(uintptr_t)heap + 0x40, 8, 0, &item, &item},
+                             {(uint64_t)(uintptr_t)heap + 0x18, 1, 0, &nine, &nine},
+                             {(uint64_t)(uintptr_t)heap + 0x24, 1, 0, &one, &zero}};
+    /* no frame: withdrawn after the wait, and a later frame does not apply it */
+    assert(write_with_frames(port, batch3, 3, 0) == 0 && heap[0x24] == 1);
+    runtime_duo_frame();
+    assert(heap[0x24] == 1);
+    /* with frames: applied, on the frame */
+    assert(write_with_frames(port, batch3, 3, 1) == 1 && heap[0x24] == 0);
+    /* the same batch again: the byte is no longer what it expects, so nothing is stored (all or none) */
+    heap[0x18] = 9; heap[0x24] = 1; item ^= 1;   /* the slot moved on to another item */
+    assert(write_with_frames(port, batch3, 3, 1) == 0 && heap[0x24] == 1);
+    printf("pass: guarded write applied at a frame, compared first, all or none\n");
+}
+#endif
 
 /* main as the loader maps it: optionally one GNU build-id note at the start of its read-only data. */
 static const uint8_t NOTE_ID[20] = {0x27, 0x71, 0x78, 0xB7, 0xDB, 0xA1, 0xB6, 0xD4, 0x94, 0x9A,
@@ -114,6 +191,11 @@ static void check_actions(const DuoPort *port) {
     assert(!strcmp(a[0].id, "eat") && a[0].enabled == 1 && !strcmp(a[0].reason, ""));
     assert(!strcmp(a[1].id, "takeOut") && a[1].enabled == 1);
     assert(!strcmp(a[2].id, "fuseArrow") && a[2].enabled == 0 && !strcmp(a[2].reason, "notAiming"));
+    /* key 9: a sage's switch, not an item (no view of a pouch slot) */
+    int views_before = atomic_load(&views);
+    assert(port->item_actions(COMPANION_SAGES, 3, a) == 1 && atomic_load(&last_sage) == 3 && atomic_load(&views) == views_before);
+    assert(!strcmp(a[0].id, "summonSage") && a[0].enabled == 0 && !strcmp(a[0].reason, "notAvailableYet"));
+    assert(!port->guarded_write);   /* Tears of the Kingdom: no guest write through the port */
     assert(atomic_load(&inits) == 1 && atomic_load(&runtime_companion_tick));   /* the frame-end hook, without JNI_OnLoad */
 
     int ok = -1; const char *reason = NULL;
@@ -223,6 +305,7 @@ int main(int argc, char **argv) {
     /* Breath of the Wild: this runtime has no item actions; the host is given none */
     assert(!port->item_actions && !port->action_state && !port->pouch_gen && !port->request && !port->result);
     printf("pass: no item actions for this game\n");
+    check_writes(port);
 #else
     assert(port->item_actions && port->action_state && port->pouch_gen && port->request && port->result);
     assert(!atomic_load(&inits));   /* nothing set up before the first call */

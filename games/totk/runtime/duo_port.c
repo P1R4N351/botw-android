@@ -14,7 +14,13 @@
    published by then; the host does everything slow on its own thread. It reads the game and installs no load plan or
    patch. Item actions (ABI 3) are not the host's: for Tears of the Kingdom the host is handed the runtime's own route
    (companion_jni.c runtime_companion_item_*, over companion_actions.c), which runs every game call on the game's
-   frame-end thread exactly as the Java companion's requests do. */
+   frame-end thread exactly as the Java companion's requests do.
+
+   One write path (ABI 4, Breath of the Wild only): the title module's Champion powers switches change one byte of a key
+   item through Eden Duo's write-batch extension, which the host forwards to guarded_write here. Each batch is checked
+   (at most DUO_PORT_WRITE_MAX_OPS stores of 1-8 bytes, every one inside the game's heap and compared with its expected
+   bytes) and applied, all or none, on the game's own thread at its next presented frame (runtime_duo_frame). Tears of
+   the Kingdom's build offers no write: its actions are the runtime's own (companion_actions.c). */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -33,11 +39,13 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 int64_t runtime_romfs_read_rel(const char *rel, uint64_t offset, void *out, uint64_t n);   /* romfs.c */
 /* aoc_romfs.c, linked by games with add-on content (games.toml game_patches: Breath of the Wild); NULL elsewhere, which
@@ -47,12 +55,14 @@ int64_t runtime_aoc_read_rel(const char *rel, uint64_t offset, void *out, uint64
 #ifdef GAME_BOTW
 #define DUO_TITLE_ID 0x01007EF00011E000ull
 #define DUO_ITEM_ACTIONS 0   /* Breath of the Wild's module needs none, and this runtime has none for that game */
+#define DUO_GUEST_WRITES 1   /* the module's Champion powers switches (botw_champion_toggle.h): guarded_write, ABI 4 */
 /* 1.6.0's main (games.toml main_build_id), the value this file handed the host before it read main's note: used only
    when that read fails, so a main without a single note still gets the companion it always had. */
 #define DUO_KNOWN_BUILD_ID "\x8E\x99\x78\xD5\x0B\xDD\x20\xB4\xC8\x39\x5A\x10\x6C\x27\xFF\xDE"
 #else
 #define DUO_TITLE_ID 0x0100F2C0115B6000ull
 #define DUO_ITEM_ACTIONS 1   /* Tears of the Kingdom: companion_actions.c, in the app builds */
+#define DUO_GUEST_WRITES 0   /* none: every change goes through companion_actions.c */
 #define DUO_KNOWN_BUILD_ID NULL   /* the 1.4.3 files are pinned by sha256, and their main has one note (desktop test) */
 #endif
 /* companion_jni.c (the app builds; weak: a headless build has no companion, and the host is then given no actions). */
@@ -64,6 +74,11 @@ int runtime_companion_item_request(const char *action, const char *category, int
 size_t runtime_companion_item_result(int seq, char *out, size_t cap) __attribute__((weak));
 #ifdef TOTK_ANDROID_APP
 const char *runtime_android_private_files(void);                                           /* frontend_android.c */
+#endif
+
+#if DUO_GUEST_WRITES
+uint64_t runtime_heap_base(void);                                              /* services.c: the guest heap */
+void runtime_guest_committed(uint64_t *heap_bytes, uint64_t *alias_mapped);    /* services.c: its committed size */
 #endif
 
 static uint64_t main_base, main_size;
@@ -84,6 +99,74 @@ static unsigned port_item_actions(int key, int slot, DuoPortAction out[3]) {
     if (n > 3) n = 3;
     for (unsigned i = 0; i < n; i++) out[i] = (DuoPortAction){a[i].id, a[i].enabled, a[i].reason};
     return n;
+}
+#endif
+
+#if DUO_GUEST_WRITES
+/* ---------- the guarded guest write (DuoPort ABI 4) ----------
+   One batch at a time: the host thread that asks fills `batch` and waits; the game's thread compares and stores it at
+   its next presented frame (apply_writes, from runtime_duo_frame) and wakes it. A batch not applied within WRITE_WAIT_MS
+   (the game paused, stuck in loading) is withdrawn and never applied later. */
+enum { WRITE_WAIT_MS = 250, W_NONE = 0, W_QUEUED, W_APPLIED, W_REFUSED };
+static pthread_mutex_t write_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t write_done = PTHREAD_COND_INITIALIZER;
+static struct {
+    int state;
+    unsigned count;
+    uint64_t address[DUO_PORT_WRITE_MAX_OPS];
+    uint32_t size[DUO_PORT_WRITE_MAX_OPS];
+    uint8_t expect[DUO_PORT_WRITE_MAX_OPS][DUO_PORT_WRITE_MAX_BYTES], value[DUO_PORT_WRITE_MAX_OPS][DUO_PORT_WRITE_MAX_BYTES];
+} batch;
+static _Atomic int write_queued;
+/* n bytes at a lie inside the application heap as committed now */
+static int in_heap(uint64_t a, uint64_t n) {
+    uint64_t base = runtime_heap_base(), size = 0, alias = 0;
+    runtime_guest_committed(&size, &alias);
+    return base && n && a >= base && a - base <= size && n <= size - (a - base);
+}
+static int port_guarded_write(const DuoPortWrite *ops, unsigned count) {
+    if (!ops || !count || count > DUO_PORT_WRITE_MAX_OPS) return 0;
+    for (unsigned i = 0; i < count; i++)
+        if (!ops[i].expect || !ops[i].value || ops[i].reserved || !ops[i].size || ops[i].size > DUO_PORT_WRITE_MAX_BYTES ||
+            !in_heap(ops[i].address, ops[i].size)) return 0;
+    pthread_mutex_lock(&write_lock);
+    if (batch.state == W_QUEUED) { pthread_mutex_unlock(&write_lock); return 0; }   /* another one is waiting */
+    batch.count = count;
+    for (unsigned i = 0; i < count; i++) {
+        batch.address[i] = ops[i].address; batch.size[i] = ops[i].size;
+        memcpy(batch.expect[i], ops[i].expect, ops[i].size); memcpy(batch.value[i], ops[i].value, ops[i].size);
+    }
+    batch.state = W_QUEUED;
+    atomic_store_explicit(&write_queued, 1, memory_order_release);
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_nsec += WRITE_WAIT_MS * 1000000L;
+    if (until.tv_nsec >= 1000000000L) { until.tv_sec++; until.tv_nsec -= 1000000000L; }
+    while (batch.state == W_QUEUED)
+        if (pthread_cond_timedwait(&write_done, &write_lock, &until) == ETIMEDOUT) break;
+    const int applied = batch.state == W_APPLIED;
+    batch.state = W_NONE;   /* withdrawn if it was still queued */
+    atomic_store_explicit(&write_queued, 0, memory_order_release);
+    pthread_mutex_unlock(&write_lock);
+    return applied;
+}
+/* The game's thread, between two frames: every expect compared (with the fault-free reader), then every store, or none. */
+static void apply_writes(void) {
+    if (!atomic_load_explicit(&write_queued, memory_order_acquire)) return;
+    pthread_mutex_lock(&write_lock);
+    if (batch.state == W_QUEUED) {
+        int ok = 1;
+        for (unsigned i = 0; i < batch.count && ok; i++) {
+            uint8_t now[DUO_PORT_WRITE_MAX_BYTES];
+            ok = in_heap(batch.address[i], batch.size[i]) && host_safe_read(batch.address[i], now, batch.size[i]) &&
+                 !memcmp(now, batch.expect[i], batch.size[i]);
+        }
+        for (unsigned i = 0; i < batch.count && ok; i++) memcpy((void *)(uintptr_t)batch.address[i], batch.value[i], batch.size[i]);
+        batch.state = ok ? W_APPLIED : W_REFUSED;
+        fprintf(stderr, "[duo] guarded write: %u store(s) %s\n", batch.count, ok ? "applied" : "not applied (the game's value changed)");
+        pthread_cond_broadcast(&write_done);
+    }
+    pthread_mutex_unlock(&write_lock);
 }
 #endif
 
@@ -187,6 +270,10 @@ static void start(void) {
     }
 #endif
     fprintf(stderr, "[duo] item actions: %s\n", port.request ? "the runtime's (companion_actions.c, game frame end)" : "none in this build");
+#if DUO_GUEST_WRITES
+    port.guarded_write = port_guarded_write;
+#endif
+    fprintf(stderr, "[duo] guarded writes: %s\n", port.guarded_write ? "at the game's next frame, heap only, compare first (ABI 4)" : "none in this build");
     static const char *const known_build = DUO_KNOWN_BUILD_ID;
     if (main_build_read) memcpy(port.build_id, main_build, sizeof port.build_id);
     else if (known_build) {
@@ -215,6 +302,9 @@ void runtime_duo_main(const Module *m) {
 void runtime_duo_frame(void) {
     atomic_fetch_add_explicit(&frames, 1, memory_order_relaxed);
     pthread_once(&start_once, start);
+#if DUO_GUEST_WRITES
+    apply_writes();   /* the companion's guarded write, if one waits: on the game's thread, between frames */
+#endif
     void (*frame)(void) = __atomic_load_n(&host_frame, __ATOMIC_ACQUIRE);
     if (frame) frame();
 }

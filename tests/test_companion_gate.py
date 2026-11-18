@@ -350,7 +350,9 @@ class CompanionGate(unittest.TestCase):
         stand-in companion host opened through TOTK_DUO_LIB (fake_duo_host.c). Each DuoPort pointer must reach its own
         runtime function with its arguments; TOTK_COMPANION=0, the paused game, invalid requests and result()'s cap are
         honoured; the build id is main's note (Breath of the Wild without one: its known 1.6.0 id); the common state
-        crosses over. For Tears of the Kingdom (item actions) and Breath of the Wild (none)."""
+        crosses over. For Tears of the Kingdom (item actions, the sages' key 9, no guest write) and Breath of the Wild (no
+        item actions; the guarded write of DuoPort ABI 4: heap bounds, at most 8 bytes per store, compare-then-write,
+        all or none, applied only at a game frame and withdrawn when none comes)."""
         host = self.directory / 'libfake_duo_host.so'
         self.command([self.compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-fPIC', '-shared',
                       str(FIXTURES / 'fake_duo_host.c'), '-o', str(host)])
@@ -372,9 +374,14 @@ class CompanionGate(unittest.TestCase):
                     if game == 'totk':
                         self.assertIn('pass: item actions reach the runtime through the port', result.stdout)
                         self.assertIn("[duo] item actions: the runtime's", result.stderr)
+                        self.assertIn('[duo] guarded writes: none in this build', result.stderr)
                     else:
                         self.assertIn('pass: no item actions for this game', result.stdout)
                         self.assertIn('[duo] item actions: none in this build', result.stderr)
+                        self.assertIn('pass: guarded write applied at a frame, compared first, all or none', result.stdout)
+                        self.assertIn('[duo] guarded write: 3 store(s) applied', result.stderr)
+                        self.assertIn("[duo] guarded write: 3 store(s) not applied (the game's value changed)",
+                                      result.stderr)
                     if note == 'nonote':
                         self.assertIn('using the supported build' if game == 'botw' else 'the package will not match it',
                                       result.stderr)

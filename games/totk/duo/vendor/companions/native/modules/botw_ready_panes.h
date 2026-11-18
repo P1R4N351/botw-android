@@ -16,6 +16,9 @@ struct ReadyPanes {
   // there is nothing to show there. Caller publishes ownership first, then calls this
   // every frame before reading left()/step() so the clamp applies immediately.
   bool champions_available{true};
+  // Local change (TotK Native; greppable: champion_toggle): the left panel's setting, Champion powers (flag left_mode
+  // 1, botw_champion_toggle.h) locks the left pager on the Champions page; Quest details (0) is the pager as above.
+  bool powers{};
   void observe_drawn(bool valid,bool value) {
     const bool next=valid && value;
     if(next && !drawn){drawn_left=2;drawn_right=1;}
@@ -29,10 +32,11 @@ struct ReadyPanes {
     if(!available && normal_left==2)normal_left=0;
     if(!available && drawn_left==2)drawn_left=0;
   }
-  int left()const{return drawn?drawn_left:normal_left;}
+  int left()const{return powers?2:drawn?drawn_left:normal_left;}
   int right()const{return drawn?drawn_right:normal_right;}
   bool step(bool right_side,int direction) {
     if(direction!=1 && direction!=-1)return false;
+    if(powers && !right_side)return false;   // local change: one left page while Champion powers is chosen
     auto& page=right_side?(drawn?drawn_right:normal_right):(drawn?drawn_left:normal_left);
     const int count=right_side?2:(!champions_available?2:3);
     page=(page+direction+count)%count;return true;

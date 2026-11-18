@@ -2,7 +2,7 @@
    GPL-3.0-or-later). libtotk fills a DuoPort and hands it to duo_host_start; the host never calls into libtotk any
    other way and libtotk calls nothing else in the host. Both sides check `abi` and `size`, so a library from another
    build is refused instead of misread. The table only grows: a new service is appended at the end, and DUO_PORT_ABI is
-   raised with it (3: the item actions, after `state`).
+   raised with it (3: the item actions, after `state`; 4: the guarded guest write, after `result`).
 
    This header is part of the port (MIT, like the runtime): it describes services, it contains no Eden Duo code. */
 #pragma once
@@ -15,7 +15,7 @@ extern "C" {
 
 struct CompanionState;             /* runtime/companion_state.h */
 
-#define DUO_PORT_ABI 3u
+#define DUO_PORT_ABI 4u
 
 /* One action the game's menus offer for an item (runtime/companion.h CompanionAction, the same three fields): id is
    "equip", "unequip", "eat", "drink", "use", "hold", "takeOut" or "fuseArrow"; reason is "" when enabled, otherwise
@@ -25,6 +25,18 @@ typedef struct DuoPortAction {
     int enabled;
     const char *reason;
 } DuoPortAction;
+
+/* One store of guarded_write (ABI 4): size bytes (1..DUO_PORT_WRITE_MAX_BYTES) at address, which must still hold
+   expect (always given: the write is compare-then-write) when value is stored. */
+typedef struct DuoPortWrite {
+    uint64_t address;
+    uint32_t size;
+    uint32_t reserved;                  /* 0 */
+    const void *expect;
+    const void *value;
+} DuoPortWrite;
+#define DUO_PORT_WRITE_MAX_BYTES 8u
+#define DUO_PORT_WRITE_MAX_OPS 4u
 
 typedef struct DuoPort {
     uint32_t abi, size;                 /* DUO_PORT_ABI, sizeof(DuoPort) */
@@ -60,7 +72,9 @@ typedef struct DuoPort {
        frame-end thread, never from the host) for a title module that offers them (Tears of the Kingdom's). All NULL:
        the runtime has none (Breath of the Wild, a build without the app's companion) and the page shows every action
        unavailable. Each may be called from any host thread. A pouch key is the companion snapshot's number (companion.h:
-       0 weapons, 1 bows, 2 shields, 3 arrows, 4 armor, 5 materials, 6 food, 7 zonai, 8 keyItems). */
+       0 weapons, 1 bows, 2 shields, 3 arrows, 4 armor, 5 materials, 6 food, 7 zonai, 8 keyItems; 9 the sages,
+       runtime/companion.h COMPANION_SAGES: the slot is the sage, the actions "summonSage" / "dismissSage", requested with
+       category "sages"). */
     /* The actions (at most 3) the game's menus offer now for the item at (key, slot) of the current pouch partition,
        by the game's own rules and the game state of the last frame end; 0: none, or the game is not in play. Asking
        keeps the frame-end refresh of that state running for a few seconds. */
@@ -77,6 +91,17 @@ typedef struct DuoPort {
     /* The latest request as {"seq":n,"state":"pending|done|refused|failed","reason":"..."} in out (NUL-terminated);
        its length, or 0 for any other seq or when it does not fit in cap. */
     size_t (*result)(int seq, char *out, size_t cap);
+    /* ---- ABI 4: the guarded guest write ------------------------------------------------------------------------------
+       For a title module whose page changes one game value itself (Breath of the Wild's Champion powers switches: one byte
+       of a key item, botw_champion_toggle.h), through Eden Duo's write-batch extension, which the host forwards here.
+       NULL: this runtime writes nothing for the companion (Tears of the Kingdom, whose actions are the runtime's own), and
+       the module's write extension gets no writer. One batch of 1..DUO_PORT_WRITE_MAX_OPS stores, each inside the game's
+       heap (the application heap as SetHeapSize set it), every expect compared first and nothing stored on any mismatch:
+       applied all or none at the game's next presented frame (runtime_duo_frame, the game's own thread, between two
+       frames), which the caller waits for (at most about a quarter second). 1: applied; 0: refused (bounds, a mismatch,
+       another batch in flight, the companion off) or not applied in time (the game paused): nothing was stored, and the
+       caller may ask again later. Any host thread. */
+    int (*guarded_write)(const DuoPortWrite *ops, unsigned count);
 } DuoPort;
 
 /* package_root is being filled by someone else (the app unpacking its APK): wait for <package_root>/.ready. */

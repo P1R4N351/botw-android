@@ -71,6 +71,14 @@ bool handle_action(State& s,const char* action,int64_t argument) {
   }
   if(std::strncmp(action,"heal_",5)==0)return heal_action(s,action,argument);
   if(std::strncmp(action,"tracker_",8)==0)return s.trackers.action(action,argument);
+  // local change: champion_toggle. A Champion's switch (argument slot*2 + on) and Turn all on, on the Champion powers
+  // panel only; carried out by the next samples (botw_champion_toggle.h), one at a time.
+  if(std::strcmp(action,"botw.champion.toggle")==0 || std::strcmp(action,"botw.champion.all_on")==0) {
+    if(!s.ready_panes.powers)return false;
+    const bool all=std::strcmp(action,"botw.champion.all_on")==0;
+    if(!all && (argument<0 || argument>7))return false;
+    return s.champion_toggle.request(all?8:int(argument));
+  }
   if(std::strcmp(action,"ready_left_pane")==0 || std::strcmp(action,"ready_right_pane")==0) {
     if(!s.bridge.scope() || (argument!=1 && argument!=-1))return false;
     if(std::strcmp(action,"ready_right_pane")==0)return s.heal.page.step(s.ready_panes,int(argument));

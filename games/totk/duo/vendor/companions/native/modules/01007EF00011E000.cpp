@@ -6,6 +6,7 @@
 #include "botw_bridge.h"
 #include "botw_ready.h"
 #include "botw_ready_panes.h"
+#include "botw_champion_toggle.h" // local change: champion_toggle (the left panel's Champion powers switches)
 #include "botw_quick_detail.h"
 #include "botw_detail_line.h"
 #include "botw_hud.h"
@@ -245,6 +246,7 @@ struct State {
   // Iteration 12 item 14: the Inventory footer status line is on screen this frame.
   bool inventory_status_shown{};
   botw::ReadyPanes ready_panes;
+  botw::ChampionToggle champion_toggle; // local change: champion_toggle
   botw::HealAdvisor heal; // card 3 = food
   uint64_t quest_selected{};
   std::chrono::steady_clock::time_point quest_next{};
@@ -1390,12 +1392,23 @@ void sample(void *p, const EdenDsmodHostApi *h) {
     // Champion ownership must be known before the pane page is published: it clamps
     // the Champions page out of the normal-left cycle when nothing is owned yet
     // (owner feedback item 11), so compute/publish it first.
-    const int champions_owned=botw::publish_champion_ownership(*h,s.data,botw::champion_abilities(*h));
+    const auto champion_states=botw::champion_abilities(*h);
+    const int champions_owned=botw::publish_champion_ownership(*h,s.data,champion_states);
     s.ready_panes.set_champions_available(champions_owned>0);
+    // local change: champion_toggle. The left panel's setting (Quest details / Champion powers), the switches, the
+    // wanted change carried out when the game allows it; Champion powers shows the Champions page even before one is
+    // obtained (its line says so), and hides the pager's dots.
+    const bool left_powers=botw::left_powers_chosen(*h);
+    s.ready_panes.powers=left_powers;
+    if(inventory_sampled)s.champion_toggle.step(*h,s.data,s.context,s.event_holding,champion_states); // the reader cadence
+    s.champion_toggle.publish(*h,s.data,left_powers,s.context,s.event_holding);
+    h->publish_i64(h->userdata,"botw.ready.left.mode",left_powers);
+    h->publish_i64(h->userdata,"botw.ready.left.powers",left_powers);
+    h->publish_i64(h->userdata,"botw.ready.left.dots",!left_powers);
     h->publish_i64(h->userdata,"botw.ready.left.page",s.ready_panes.left());
     h->publish_i64(h->userdata,"botw.ready.right.page",s.heal.page.right(s.ready_panes));
     h->publish_i64(h->userdata,"botw.ready.left.quest",s.ready_panes.left()<2);
-    h->publish_i64(h->userdata,"botw.ready.left.champions",s.ready_panes.left()==2 && champions_owned>0);
+    h->publish_i64(h->userdata,"botw.ready.left.champions",(s.ready_panes.left()==2 && champions_owned>0) || left_powers);
     h->publish_i64(h->userdata,"botw.ready.right.weather",s.heal.page.right(s.ready_panes)==0);
     h->publish_i64(h->userdata,"botw.ready.right.buffs",s.heal.page.right(s.ready_panes)==1);
     h->publish_i64(h->userdata,"botw.ready.weapon_drawn",drawn.valid&&drawn.weapon);
@@ -1993,6 +2006,13 @@ EdenDsmodBool load_image(void*,const EdenDsmodHostApi* h,const char* key,void* r
 }
 const EdenDsmodModuleExtensions extensions{EDEN_DSMOD_EXT_VERSION,
   sizeof(EdenDsmodModuleExtensions),EDEN_DSMOD_EXT_HASH,configure,on_action,load_image};
+// local change: champion_toggle. The write extension (Eden Duo's write batch; BotW Native forwards it to its runtime's
+// guarded write): the only writer of the Champion powers switches. Without it the switches show read-only.
+void configure_writes(void* p,const EdenDsmodHostWriteApi* w) {
+  try {static_cast<State*>(p)->champion_toggle.configure(w);} catch(...) {}
+}
+const EdenDsmodModuleWriteExtensions write_extensions{EDEN_DSMOD_WRITE_EXT_VERSION,
+  sizeof(EdenDsmodModuleWriteExtensions),EDEN_DSMOD_WRITE_EXT_HASH,configure_writes};
 } // namespace
 extern "C" __attribute__((visibility("default"))) const EdenDsmodModuleApi *
 eden_dsmod_get_module(uint32_t v, uint64_t hash) {
@@ -2004,4 +2024,9 @@ eden_dsmod_get_module(uint32_t v, uint64_t hash) {
 extern "C" __attribute__((visibility("default"))) const EdenDsmodModuleExtensions*
 eden_dsmod_get_extensions(uint32_t v,uint64_t hash) {
   return v==EDEN_DSMOD_EXT_VERSION && hash==EDEN_DSMOD_EXT_HASH ? &extensions : nullptr;
+}
+// local change: champion_toggle
+extern "C" __attribute__((visibility("default"))) const EdenDsmodModuleWriteExtensions*
+eden_dsmod_get_write_extensions(uint32_t v,uint64_t hash) {
+  return v==EDEN_DSMOD_WRITE_EXT_VERSION && hash==EDEN_DSMOD_WRITE_EXT_HASH ? &write_extensions : nullptr;
 }

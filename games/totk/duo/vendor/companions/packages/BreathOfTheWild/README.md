@@ -36,6 +36,18 @@ rings and markers); `dualscreen/ASSETS.provenance.json` declares them.
 | `native/helper/botw/` | Guest helper (AArch64 assembly) that the load plan installs. |
 | `tools/botw/` | Rebuild scripts for the load plan and the release modules. |
 
+## TotK Native's local changes
+
+This copy is vendored in BotW Native / TotK Native (`games/totk/duo/vendor/README.md` lists every change):
+
+- **Minimap** (settings row, flag `map_rotate`): north up by default, or turning with the camera; holding the minimap
+  opens it.
+- **Left panel** (settings row, flag `left_mode`; holding the left pager opens it): *Quest details* (the default, the
+  pager above: main quest, side quest, Champions) or *Champion powers*: the Champions only, each with an On/Off switch,
+  and *Turn all on*. A switch writes one byte, the power's key item's equipped flag, which the game checks before a power
+  fires and keeps in the save: a power turned off stays off in that save until it is turned on again here. 1.6.0 only;
+  the write goes through the host's write batch (every expected byte compared first). Not verified on a device yet.
+
 This README sits outside `dualscreen/` on purpose: the packager archives `dualscreen/` as is,
 and excludes source documentation from the portable archive.
 

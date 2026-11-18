@@ -32,7 +32,7 @@ Tested on the AYN Thor unless noted.
 | Game patches | `runtime/game_patches_botw.c`: exclusive loads with acquire (a job-queue race on fast cores) and the real-time frame step, both ported from MacNativeGames (MIT) |
 | Missing shaders | A draw waits for the on-device translator (`TOTK_XLATE_WAIT_MS`, default 4000) and for a compiling pipeline (`TOTK_VK_PIPE_SYNC`, default 1). The game draws some images once and keeps them, so a skipped draw stays wrong (`env_defaults` in `games/games.toml`) |
 | App identity | `games/games.toml` (GameBuild.java is generated from it): name, version label, install checks, accent colours, package, label, keys, launcher art |
-| Second screen | The Eden Duo page (`libduo_host.so`, GPL-3.0; `companion = "duo"`, `gpl_companion = true`, `duo` = `BreathOfTheWild`); the TotK app now has its own Eden Duo page the same way (`APP.md`). Its minimap is north up unless *Graphics → Screen → Second screen map* is *Rotate with camera*; then it turns with the camera whether the game's own minimap option turns or not (local change to the vendored module, `duo/vendor/README.md`) |
+| Second screen | The Eden Duo page (`libduo_host.so`, GPL-3.0; `companion = "duo"`, `gpl_companion = true`, `duo` = `BreathOfTheWild`); the TotK app now has its own Eden Duo page the same way (`APP.md`). Its minimap is north up unless *Graphics → Screen → Second screen map* is *Rotate with camera*; then it turns with the camera whether the game's own minimap option turns or not (local change to the vendored module, `duo/vendor/README.md`). Its left panel is *Graphics → Screen → Left panel*: *Quest details* (upstream's Main quest / Side quest / Champions pager) or *Powers* (the Champions only, each with an On/Off switch and *Turn all on*: one guarded byte of the power's key item, written through the runtime's DuoPort ABI 4 write at the game's next frame, 1.6.0 only; an Off power stays off in that save; local change `botw_champion_toggle.h`, not yet checked on a device) |
 | On-device setup | Not ported. The app's setup still imports Tears of the Kingdom only |
 
 ## Putting the game on a device (developer route)
@@ -63,6 +63,12 @@ install.json                                          # format 1, game "botw", v
   integration, in both APKs.
 - The quick-menu background fix from the TotK fork (upstream PR #44) patches TotK 1.4.3's own code and does not apply.
 - Long play. Only the opening, the Great Plateau and the menus were looked at.
+- The left panel's Champion powers switches (`duo/vendor/companions/native/modules/botw_champion_toggle.h`): built from
+  static analysis only. To verify on the device before release, read-only first: `*(PMDM+0x44520)` (PMDM =
+  `*(main+0x2CA6D50)`) equals the Goron item the pouch snapshot lists and its `+0x24` reads 1 with the power on (the
+  upstream module notes a HUD observation that disagrees, `botw_ready_panes.h`); then, on a copy of a save, a power
+  turned off: its HUD icon goes and it does not fire, a manual save, reload and restart keep it off, *Turn all on*
+  brings it back; a change while a power is in use (Daruk's bubble up, Revali's Gale charging).
 
 ## Credits
 
