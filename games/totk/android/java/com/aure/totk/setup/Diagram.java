@@ -66,6 +66,7 @@ final class Diagram extends View {
             case "native_hud": hud(c, w, h); break;
             case "overlay": case "overlay_pos": handheld(c, w, h); break;
             case "second_screen": dual(c, w, h); break;
+            case "duo_map": minimap(c, w, h); break;
             case "buttons": buttons(c, w, h); break;
             case "audio_latency": audio(c, w, h); break;
             case "game_language": language(c, w, h); break;
@@ -423,6 +424,46 @@ final class Diagram extends View {
             c.drawCircle(bs.left + bs.width() * .25f, bs.top + bs.height() * .35f, s(4), paint);
             c.drawCircle(bs.left + bs.width() * .7f, bs.top + bs.height() * .7f, s(4), paint);
         } else label(c, Strings.DIAG_OFF, bs.centerX(), bs.centerY() + s(7), 18, Theme.TEXT3, Paint.Align.CENTER);
+        if (!secondScreen) label(c, Strings.DIAG_NO_SECOND, w / 2, h - s(4), 16, Theme.AMBER, Paint.Align.CENTER);
+    }
+    /** Second screen map: the round minimap with its N badge on the rim and the player's arrow, looking 40 degrees east
+     * of north. North up: N at the top, the arrow turned. Rotate with camera: the map and its N turned so the view is up. */
+    private void minimap(Canvas c, float w, float h) {
+        boolean turns = value("duo_map").equals("rotate");
+        float view = 40, turn = turns ? -view : 0;
+        float r = Math.min(w * .3f, h * .38f), cx = w / 2, cy = h / 2 + s(8);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.tint(0xff1b2c26)); c.drawCircle(cx, cy, r, paint);
+        c.save();
+        Path disc = new Path(); disc.addCircle(cx, cy, r, Path.Direction.CW); c.clipPath(disc);
+        c.rotate(turn, cx, cy);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s(1)); paint.setColor(Theme.withAlpha(Theme.ZONAI, 0x40));
+        for (float x = cx - r; x <= cx + r; x += s(18)) c.drawLine(x, cy - r, x, cy + r, paint);
+        for (float y = cy - r; y <= cy + r; y += s(18)) c.drawLine(cx - r, y, cx + r, y, paint);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.alpha(Theme.AMBER, .8f));
+        c.drawCircle(cx + r * .45f, cy - r * .3f, s(4), paint);
+        c.drawCircle(cx - r * .35f, cy + r * .5f, s(4), paint);
+        c.restore();
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s(2.5f)); paint.setColor(Theme.SEL); c.drawCircle(cx, cy, r, paint);
+        // the N badge orbits the disc with the map
+        double a = Math.toRadians(turn - 90);
+        float nx = cx + (float) Math.cos(a) * r, ny = cy + (float) Math.sin(a) * r, nr = s(15);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.tint(0xff0d1412)); c.drawCircle(nx, ny, nr, paint);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s(2)); paint.setColor(Theme.SEL); c.drawCircle(nx, ny, nr, paint);
+        paint.setStyle(Paint.Style.FILL); paint.setTypeface(Theme.semibold); paint.setTextSize(nr * 1.1f); paint.setTextAlign(Paint.Align.CENTER);
+        paint.setColor(Theme.TEXT);
+        Paint.FontMetrics fm = paint.getFontMetrics();
+        c.drawText(Strings.DIAG_NORTH, nx, ny - (fm.ascent + fm.descent) / 2, paint);
+        paint.setTextAlign(Paint.Align.LEFT);
+        // the player's arrow in the middle, pointing the way the view looks
+        c.save();
+        c.rotate(view + turn, cx, cy);
+        Path arrow = new Path();
+        arrow.moveTo(cx, cy - s(20)); arrow.lineTo(cx + s(13), cy + s(14)); arrow.lineTo(cx, cy + s(7)); arrow.lineTo(cx - s(13), cy + s(14)); arrow.close();
+        paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.SEL); paint.setShadowLayer(s(6), 0, 0, Theme.SEL_GLOW);
+        c.drawPath(arrow, paint);
+        paint.clearShadowLayer();
+        c.restore();
+        if (!value("second_screen").equals("on")) label(c, Strings.DIAG_OFF, cx, cy + r + s(28), 18, Theme.TEXT3, Paint.Align.CENTER);
         if (!secondScreen) label(c, Strings.DIAG_NO_SECOND, w / 2, h - s(4), 16, Theme.AMBER, Paint.Align.CENTER);
     }
     /** Button layout: the four face buttons with their labels; the one that acts as the Switch's A glows. */

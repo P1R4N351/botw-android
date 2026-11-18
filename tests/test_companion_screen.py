@@ -487,5 +487,88 @@ class DuoTouchDefault(unittest.TestCase):
             self.assertNotIn('TOTK_DUO_TOUCH=1', text, doc)
 
 
+class DuoMapTurn(unittest.TestCase):
+    """The second screen's minimap (owner, 2026-11-17): both games north up by default, one preference common to both
+    (the menu's Second screen map, settings.env TOTK_DUO_MAP_ROTATE=1, and each package's own settings row, flag
+    map_rotate). The module decides the turn and publishes it under the names the minimap, the arrow and the N badge
+    already bind, so no widget changes its binds and no widget index moves (the TotK generator addresses BotW's by
+    index)."""
+    VENDOR = ROOT / 'games/totk/duo/vendor/companions'
+    PACKAGES = {'botw': 'BreathOfTheWild', 'totk': 'TearsOfTheKingdom'}
+
+    def manifest(self, game):
+        import json
+        return json.loads((self.VENDOR / 'packages' / self.PACKAGES[game] / 'dualscreen/manifest.json').read_text())
+
+    def test_both_packages_default_to_north_up(self):
+        for game, turn in (('botw', 'Rotate with camera'), ('totk', 'Rotate with Link')):
+            with self.subTest(game=game):
+                m = self.manifest(game)
+                self.assertEqual(m['settings'], [{'flag': 'map_rotate', 'label': 'Minimap', 'type': 'toggle',
+                                                  'choices': ['North up', turn], 'default': 0}])
+                self.assertNotIn('map_rotate', m.get('flags', {}))      # a "flags" value would win over the default
+                self.assertGreaterEqual(m['min_runtime'], 17)           # settings rows: runtime 17
+                self.assertEqual(m['actions']['open_settings']['page'], '@settings')
+                ready = next(p for p in m['pages'] if p['id'] == 'ready')['widgets']
+                holds = [w for w in ready if w.get('on_hold') == 'open_settings']
+                self.assertEqual(len(holds), 1)                          # holding the minimap opens it
+                self.assertEqual(holds[0]['rect'], [220, 64, 800, 800])
+
+    def test_the_turn_is_bound_through_the_module_values(self):
+        for game in ('botw', 'totk'):
+            with self.subTest(game=game):
+                ready = next(p for p in self.manifest(game)['pages'] if p['id'] == 'ready')['widgets']
+                by_id = {w['id']: w for w in ready if 'id' in w}
+                minimap = by_id['ready_map' if game == 'botw' else 'totk_minimap']
+                self.assertEqual(minimap['view_rotate_bind'], f'{game}.map.view.rotation')
+                self.assertEqual(minimap['marker_rotate_bind'], f'{game}.map.view.heading')
+                for arrow in ('pd_ready_player_arrow_shadow', 'pg_fix_ready_player_arrow'):
+                    self.assertEqual(by_id[arrow]['rotate_bind'], f'{game}.map.view.heading')
+                # the N badge orbits the disc's centre with the map: north up = at the top
+                for badge in ('pg_ready_north_ring', 'pg_ready_north_disc'):
+                    self.assertEqual(by_id[badge]['rotate_bind'], f'{game}.map.view.rotation')
+                    self.assertAlmostEqual(by_id[badge]['rect'][1] + by_id[badge]['pivot'][1], 64 + 400, delta=2)
+                # the full Map page is north up in both games
+                for page in self.manifest(game)['pages']:
+                    if page['id'] != 'ready':
+                        self.assertFalse([w for w in page['widgets'] if 'view_rotate_bind' in w], page['id'])
+        self.assertEqual(len(next(p for p in self.manifest('botw')['pages'] if p['id'] == 'ready')['widgets']), 990)
+
+    def test_the_modules_turn_only_on_the_flag(self):
+        modules = self.VENDOR / 'native/modules'
+        view = (modules / 'botw_map_view.h').read_text()
+        self.assertIn('return h.get_i64 && h.get_i64(h.userdata,"@flag:map_rotate",0)==1;', view)
+        self.assertIn('if(rotate){out.map_rz=yaw;if(v.cone_valid)out.cone_rz=0.f;}', view)
+        self.assertIn('else{out.map_rz=0.f;if(v.cone_valid)out.cone_rz=-yaw;}', view)
+        botw = (modules / '01007EF00011E000.cpp').read_text()
+        # both reads of the view (the 100 ms pass and the 30 Hz camera pass) go through the choice; nothing else reads it
+        self.assertEqual(botw.count('botw::prefer_map_view(botw::map_view(*h,s.view.cone_pane),botw::map_rotate_chosen(*h))'), 2)
+        self.assertEqual(botw.count('botw::map_view(*h,'), 2)
+        totk = (modules / '0100F2C0115B6000.cpp').read_text()
+        self.assertIn('const double turn = Get("@flag:map_rotate", 0) == 1 ? Turn(-heading) : 0.0;', totk)
+        self.assertIn('F64("totk.map.view.rotation", turn);', totk)
+
+    def test_the_host_applies_the_menu_at_start(self):
+        host = (ROOT / 'games/totk/duo/duo_host.cpp').read_text()
+        self.assertIn('const bool rotate = EnvIs("TOTK_DUO_MAP_ROTATE", "1");', host)
+        self.assertIn('manifest.flag_defaults.insert_or_assign(Flag, rotate ? 1 : 0);', host)
+        self.assertIn('std::erase(manifest.persist_flags, Flag);', host)   # the menu wins over a persisted value
+        start = host[host.index('bool StartRuntime() {'):]
+        self.assertLess(start.index('ApplyMapPreference(*manifest);'), start.index('g_runtime.emplace('))
+        entry = host[host.index('void ApplyMapPreference('):host.index('bool StartRuntime() {')]
+        self.assertNotIn('title_id', entry)   # one rule for both games
+
+    def test_docs_name_the_setting(self):
+        for doc in ('docs/developer-settings.md', 'docs/companion.md', 'games/totk/android/APP.md',
+                    'games/totk/android/BOTW.md'):
+            self.assertIn('Second screen map', (ROOT / doc).read_text(), doc)
+        self.assertIn('TOTK_DUO_MAP_ROTATE=1', (ROOT / 'docs/developer-settings.md').read_text())
+        local = (ROOT / 'games/totk/duo/vendor/README.md').read_text()
+        local = local[local.index('## Local changes'):]
+        for name in ('botw_map_view.h', '01007EF00011E000.cpp', 'BreathOfTheWild/dualscreen/manifest.json'):
+            self.assertIn(name, local)
+        self.assertIn('map_rotate', (ROOT / 'games/totk/duo/NOTICE.txt').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()

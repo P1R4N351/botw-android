@@ -11,6 +11,7 @@
 //     3. the tick loop. The game posts one wake per presented frame (duo_host_frame); the loop also wakes 16 ms
 //        after its last tick, so the page keeps its 60 Hz clock while the game renders 30 frames a second and
 //        keeps animating through a loading stall. Nothing of this runs on a game thread.
+//   One menu option reaches the page: TOTK_DUO_MAP_ROTATE (ApplyMapPreference), the minimap's turn.
 //   The page reaches the screen through AuxRouting, as in the emulator: the runtime publishes ARGB pixels, the
 //   "duo-present" thread copies each new frame into the second screen's Surface (DuoSurfaceView hands it over by
 //   JNI). No GPU is involved; the game's Vulkan device never sees the companion.
@@ -329,6 +330,22 @@ bool WaitForPackage() {
     return false;
 }
 
+/// The menu's "Second screen map" (Graphics -> Screen, both games; settings.env TOTK_DUO_MAP_ROTATE=1, absent = North
+/// up): the package's "Minimap" settings row, flag map_rotate (0 north up, 1 turning with the view; both companion
+/// packages carry it), starts at the menu's value on every start. The flag is then neither restored from nor saved to the
+/// runtime's persisted-flags file: the choice lives in the app's menu, and a change made on the companion's own settings
+/// page (hold the minimap) lasts until the game ends. A package without the row is left as it is.
+void ApplyMapPreference(Core::Mods::Manifest& manifest) {
+    static const std::string Flag = "map_rotate";
+    if (!manifest.flag_defaults.contains(Flag)) {
+        return;
+    }
+    const bool rotate = EnvIs("TOTK_DUO_MAP_ROTATE", "1");
+    manifest.flag_defaults.insert_or_assign(Flag, rotate ? 1 : 0);
+    std::erase(manifest.persist_flags, Flag);
+    Say("duo: minimap {} (TOTK_DUO_MAP_ROTATE={})", rotate ? "turns with the view" : "north up", rotate ? 1 : 0);
+}
+
 bool StartRuntime() {
     if (g_package_root.empty() || ((g_port.flags & DUO_PORT_WAIT_PACKAGE) != 0 && !WaitForPackage())) {
         Say("duo: no companion package under '{}'", g_package_root);
@@ -344,6 +361,7 @@ bool StartRuntime() {
         }
         Say("duo: package '{}' ({}), {} pages, canvas {}x{}", manifest->name, manifest->mod_dir_name,
             manifest->pages.size(), manifest->canvas_w, manifest->canvas_h);
+        ApplyMapPreference(*manifest);
         g_runtime.emplace(*g_system, std::move(*manifest));
         g_runtime->SetMainMemoryParameters(g_port.main_base, g_port.main_size);
         g_runtime->Initialize();

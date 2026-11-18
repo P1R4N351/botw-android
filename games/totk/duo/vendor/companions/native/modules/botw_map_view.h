@@ -100,6 +100,27 @@ inline MapView map_view(const EdenDsmodHostApi& h,uint64_t cached_cone=0) {
   if(out.cone_valid){Pane leaf2{};if(!pane(h,cone,leaf2) || leaf2.vtable!=leaf.vtable || leaf2.name!=leaf.name || leaf2.rotate!=leaf.rotate){out.cone_valid=false;out.cone_rz=0;}}
   return out;
 }
+// Local change (TotK Native, games/totk/duo/vendor/README.md "Local changes"; greppable: map_rotate). The game's own
+// option decides what the native minimap shows; the companion's minimap follows the player's choice instead, the
+// package's settings row "Minimap" (flag map_rotate; BotW Native's menu sets it at every start), whatever the game's
+// option is. Both native states carry the camera's yaw: turning, N_MapSR_00 = yaw and P_Light_00 = 0; fixed north,
+// N_MapSR_00 = 0 and P_Light_00 = -yaw. So yaw = map_rz - cone_rz in either, and each choice is rewritten as the
+// native state of that option: north up (0, the default) = map 0 and cone -yaw; rotate with the camera (1) = map
+// yaw and cone 0 (straight up). Everything that turns with the view reads the result: the map, the arrow and the cone
+// (publish_map_view), the N badge (botw.map.view.rotation), the pins and quest marks on the disc and the shrine
+// compass (view_rotation). Without the cone pane the yaw is unknown while the game is fixed north: the minimap then
+// shows what the game shows.
+inline bool map_rotate_chosen(const EdenDsmodHostApi& h) {
+  return h.get_i64 && h.get_i64(h.userdata,"@flag:map_rotate",0)==1;
+}
+inline MapView prefer_map_view(const MapView& v,bool rotate) {
+  if(!v.valid)return v;
+  MapView out=v;
+  const float yaw=v.cone_valid?v.map_rz-v.cone_rz:v.map_rz;
+  if(rotate){out.map_rz=yaw;if(v.cone_valid)out.cone_rz=0.f;}
+  else{out.map_rz=0.f;if(v.cone_valid)out.cone_rz=-yaw;}
+  return out;
+}
 // Companion degrees, clockwise on the y-down canvas, in [0, 360) on a half-degree grid: a slow
 // camera drift moves the rim by at most ~3.5 px per step (whole degrees moved it ~7 px).
 inline constexpr double TurnStep=0.5;

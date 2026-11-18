@@ -67,6 +67,7 @@ both processes without a SharedPreferences cache. They contain no URL; changing 
 | Performance overlay | Off / FPS / Full | `TOTK_OVERLAY=off` / `fps` / `full` |
 | Overlay position | corners | `TOTK_OVERLAY_POS=tl` / `tr` / `bl` / `br` |
 | Second screen | Off / On | `TOTK_COMPANION=0` / `1` |
+| Second screen map | North up / Rotate with camera | nothing / `TOTK_DUO_MAP_ROTATE=1` (the Eden Duo page's minimap, both games: `duo/duo_host.cpp` sets the packages' `map_rotate` flag from it at start; Tears of the Kingdom turns with Link's facing, no camera direction is read) |
 | Button layout | Nintendo / Xbox | `TOTK_FACE_BUTTONS=label` / `position` |
 | Audio latency | Low / Balanced / Safe | `TOTK_AUDIO_PREFILL_MS=10` / `20` / `40` |
 | Rumble | Off / 25–100 % | `TOTK_RUMBLE=0`, or `TOTK_RUMBLE=1` + `TOTK_RUMBLE_GAIN=0.25`…`1.0` |
@@ -88,6 +89,7 @@ Everything not in the menu is a developer switch. A selection:
 | `TOTK_BENCH_TIME=02:00` | Benchmark-only, launch-time 1.4.3 effective clock override; strict `HH:MM` (`00:00`–`23:59`). Absent/`off` keeps native code/data unchanged, without a veneer; any other value logs one rejection and stays off. |
 | `TOTK_COMPANION=0` | Disables the second-screen companion at runtime (no controller, display listener or poller is started). |
 | `TOTK_DUO_TOUCH=0` | Second screen (Eden Duo page, both games): ignores touches; the page still shows. Touch is on by default. |
+| `TOTK_DUO_MAP_ROTATE=1` / `0` | Second screen (Eden Duo page, both games): the minimap turns with the view / stays north up, over the menu's *Second screen map*. |
 | `TOTK_COMPANION_LOG=1` | Logs each companion status change and the first full snapshot to `totk.log`. |
 | `TOTK_INPUT_LOG=1` | Logs each **−** / **R** overlay-chord decision as `[chord] …`. |
 | `TOTK_VK_SHOT=300` | Saves every 300th frame as a screenshot. |

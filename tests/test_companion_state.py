@@ -185,6 +185,11 @@ class CompanionStateTests(unittest.TestCase):
                 self.assertFalse(include.startswith('../duo') or include.startswith('duo/'), (name, include))
         port = (TOTK / 'runtime/duo_port.c').read_text()
         self.assertEqual([i for i in re.findall(r'#include "([^"]+)"', port) if 'duo/' in i], ['../duo/duo_port.h'])
+        # The menu's Second screen map reaches the GPL host as an environment line only (settings.env, allowlisted by the
+        # MIT frontend); the host turns it into the packages' flag (duo_host.cpp ApplyMapPreference).
+        self.assertIn('"TOTK_DUO_MAP_ROTATE"', (TOTK / 'runtime/frontend_android.c').read_text())
+        self.assertIn('TOTK_DUO_MAP_ROTATE=1', (TOTK / 'android/java/com/aure/totk/setup/Settings.java').read_text())
+        self.assertIn('getenv', (TOTK / 'duo/duo_host.cpp').read_text())
         self.assertIn('dlopen', port)
         # Tears of the Kingdom: the host's fresh sample first, its own reader until there is one, without the host, or
         # once the host's sample is older than the app takes (the host stopped). Run: test_companion_gate (jni_probe.c).

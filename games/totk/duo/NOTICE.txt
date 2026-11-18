@@ -11,7 +11,7 @@ assets/duo/, that game's companion package. They come from the Eden Duo project:
 
   Eden Duo Companions (the title modules and their packages)
       https://github.com/P1R4N351/eden-duo-companions  branch totk-companion
-                                                      commit 7e3faa6e1e17d246bde5c64f4c877b28e7bb87a9
+                                                      commit 7cd5fe6a117921f95abc4248ac0fc309f945b21b
       (a fork of https://github.com/igawa6/eden-duo-companions; that commit is upstream's
       2169928d2f301aa7bb3b13777ca8a94d0e73961d plus the Tears of the Kingdom companion)
       GPL-3.0 (GPL-3.0-or-later per file)
@@ -39,7 +39,9 @@ also compiles games/totk/runtime/companion_state.h, and it is built by games/tot
 games/totk/duo/CMakeLists.txt under games/totk/android/build_release.py, which take the game's title and module from
 games/games.toml (tools/games.py). The tree holds the vendored Eden Duo and companion files at the commits above
 (games/totk/duo/vendor, with every local change listed in its README.md; among them, modified 2026-11-17: the Breath
-of the Wild page's "Area unavailable" label no longer shows), the port's shim and host code, the rest of the
+of the Wild page's "Area unavailable" label no longer shows, and its minimap is north up unless the player turns it with
+the camera, flag map_rotate, in native/modules/botw_map_view.h, 01007EF00011E000.cpp and the package's manifest.json),
+the port's shim and host code, the rest of the
 app, and its build scripts, which fetch the other third-party sources at pinned commits and name the two prebuilt
 inputs (the Turnip driver: its recipe is games/totk/android/turnip; the shader translator: games/totk/tools/totk_xlate).
 Where to get it: the section "Source of this APK" at the top of this file, written by the build, names the repository

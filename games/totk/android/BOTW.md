@@ -32,7 +32,7 @@ Tested on the AYN Thor unless noted.
 | Game patches | `runtime/game_patches_botw.c`: exclusive loads with acquire (a job-queue race on fast cores) and the real-time frame step, both ported from MacNativeGames (MIT) |
 | Missing shaders | A draw waits for the on-device translator (`TOTK_XLATE_WAIT_MS`, default 4000) and for a compiling pipeline (`TOTK_VK_PIPE_SYNC`, default 1). The game draws some images once and keeps them, so a skipped draw stays wrong (`env_defaults` in `games/games.toml`) |
 | App identity | `games/games.toml` (GameBuild.java is generated from it): name, version label, install checks, accent colours, package, label, keys, launcher art |
-| Second screen | The Eden Duo page (`libduo_host.so`, GPL-3.0; `companion = "duo"`, `gpl_companion = true`, `duo` = `BreathOfTheWild`); the TotK app now has its own Eden Duo page the same way (`APP.md`) |
+| Second screen | The Eden Duo page (`libduo_host.so`, GPL-3.0; `companion = "duo"`, `gpl_companion = true`, `duo` = `BreathOfTheWild`); the TotK app now has its own Eden Duo page the same way (`APP.md`). Its minimap is north up unless *Graphics → Screen → Second screen map* is *Rotate with camera*; then it turns with the camera whether the game's own minimap option turns or not (local change to the vendored module, `duo/vendor/README.md`) |
 | On-device setup | Not ported. The app's setup still imports Tears of the Kingdom only |
 
 ## Putting the game on a device (developer route)

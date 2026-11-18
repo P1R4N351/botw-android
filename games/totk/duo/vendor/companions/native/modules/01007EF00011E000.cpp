@@ -414,7 +414,7 @@ void sample(void *p, const EdenDsmodHostApi *h) {
       }
       { BOTW_PERF_TIMER(MapView);
       s.position=botw::map_position(*h);
-      s.view=botw::map_view(*h,s.view.cone_pane);
+      s.view=botw::prefer_map_view(botw::map_view(*h,s.view.cone_pane),botw::map_rotate_chosen(*h)); // local change: map_rotate
       }
       s.current_rune=botw::current_rune(*h);
       s.states=botw::game_states(*h,&s.state_flags);
@@ -494,7 +494,7 @@ void sample(void *p, const EdenDsmodHostApi *h) {
       // At most ~30 Hz: the companion republishes at 30 Hz and the game turns its minimap at
       // its own frame rate (30 fps), so reading every 60 Hz tick would only double the cost.
       s.view_next=now+std::chrono::milliseconds(30);
-      const auto turned=botw::map_view(*h,s.view.cone_pane);
+      const auto turned=botw::prefer_map_view(botw::map_view(*h,s.view.cone_pane),botw::map_rotate_chosen(*h)); // local change: map_rotate
       if(turned.valid)s.view=turned;
     }
     // Quests are only shown in World/menu; elsewhere they were read and discarded.

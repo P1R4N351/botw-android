@@ -1270,7 +1270,11 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             case Settings.PICTURE: keys.addAll(Arrays.asList("upscaler", "sharpness", "aa", "shadows")); break;
             default:
                 keys.addAll(Arrays.asList("console_mode", "native_hud", "overlay", "overlay_pos"));
-                if (SettingsStore.secondaryDisplay(this)) keys.add("second_screen");
+                if (SettingsStore.secondaryDisplay(this)) {
+                    keys.add("second_screen");
+                    // The Eden Duo page's minimap (both games); CompanionView's map has no turn
+                    if (!ArtPolicy.used(GameBuild.COMPANION)) keys.add("duo_map");
+                }
         }
         for (String key : keys) settingRow(list, key);
         detailPanel();
@@ -1475,6 +1479,10 @@ public final class SetupActivity extends Activity implements SetupService.Listen
                     fact(Strings.COMPANION_ROW, art.done("companion") ? Strings.READY : art.artOutdated() ? Strings.OUT_OF_DATE : Strings.NOT_PREPARED);
                     break;
                 }
+                case "duo_map":
+                    fact(Strings.APPLIES, Strings.WHEN_STARTS);
+                    if (!settings.get("second_screen").equals("on")) constraint = Strings.NEEDS_SECOND_SCREEN;
+                    break;
                 case "rumble":
                     fact(Strings.STRENGTH, value.equals("0") ? Strings.valueName(key, value) : value + " % of the game's rumble");
                     break;

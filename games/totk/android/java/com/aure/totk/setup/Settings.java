@@ -48,6 +48,7 @@ final class Settings {
         new Option("overlay", SCREEN, "off", "off", "fps", "full"),
         new Option("overlay_pos", SCREEN, "tr", "tl", "tr", "bl", "br"),
         new Option("second_screen", SCREEN, "on", "off", "on"),
+        new Option("duo_map", SCREEN, "north", "north", "rotate"),   // the second screen's minimap: north up or turning
         new Option("buttons", CONTROLS, "nintendo", "nintendo", "xbox"),
         new Option("audio_latency", CONTROLS, "balanced", "low", "balanced", "safe"),
         new Option("rumble", CONTROLS, "100", "0", "25", "50", "75", "100"),
@@ -272,6 +273,8 @@ final class Settings {
         line(out, "TOTK_OVERLAY=" + get("overlay"));
         line(out, "TOTK_OVERLAY_POS=" + get("overlay_pos"));
         line(out, "TOTK_COMPANION=" + (get("second_screen").equals("on") ? "1" : "0"));
+        // Absent = North up, the default (duo_host.cpp ApplyMapPreference), so the default file stays as it was.
+        if (get("duo_map").equals("rotate")) line(out, "TOTK_DUO_MAP_ROTATE=1");
         line(out, "TOTK_FACE_BUTTONS=" + (get("buttons").equals("xbox") ? "position" : "label"));
         line(out, "TOTK_AUDIO_PREFILL_MS=" + (get("audio_latency").equals("low") ? "10" : get("audio_latency").equals("safe") ? "40" : "20"));
         // Rumble strength 0 gives the game no vibration devices; otherwise the game's rumble times the strength.

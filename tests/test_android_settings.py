@@ -18,7 +18,7 @@ ALLOWED = {'TOTK_FPS60', 'TOTK_GPU_TIME', 'TOTK_FRAMEGEN', 'TOTK_FRAMEGEN_ENGINE
            'DM_PRESENT_INTERVAL', 'TOTK_PRESENT_SLOTS', 'TOTK_VK_PRESENT', 'TOTK_ACQUIRE_SLACK', 'TOTK_ACQUIRE_CLOCK',
            'TOTK_PACE', 'TOTK_ASYNC_REPLAY', 'TOTK_RENDER_RES', 'TOTK_POST_SCALE', 'TOTK_POST_SHARPNESS',
            'TOTK_POST_SGSR_SHARPNESS', 'TOTK_FXAA', 'TOTK_POST_AA', 'TOTK_SHADOW_RES', 'TOTK_OPERATION_MODE',
-           'TOTK_NATIVE_UI', 'TOTK_OVERLAY', 'TOTK_OVERLAY_POS', 'TOTK_COMPANION', 'TOTK_FACE_BUTTONS',
+           'TOTK_NATIVE_UI', 'TOTK_OVERLAY', 'TOTK_OVERLAY_POS', 'TOTK_COMPANION', 'TOTK_DUO_MAP_ROTATE', 'TOTK_FACE_BUTTONS',
            'TOTK_AUDIO_PREFILL_MS', 'TOTK_LOCALE', 'TOTK_LANG', 'TOTK_DATA_DIR', 'TOTK_RUMBLE', 'TOTK_RUMBLE_GAIN', 'TOTK_GYRO',
            'TOTK_AUTOLOAD', 'TOTK_VK_SPLIT_PASS_DRAWS', 'TOTK_ADPF_GPU', 'TOTK_FPS60_HYSTERESIS',
            'TOTK_UNCAPPED', 'TOTK_UNCAPPED_HZ', 'TOTK_UNCAPPED_INTERVAL', 'TOTK_FRAME_RATE_HINT', 'TOTK_FRAME_RATE_HINT_HZ'}
@@ -358,6 +358,31 @@ class SettingsTests(unittest.TestCase):
         self.assertIn('TOTK_RUMBLE_GAIN=0.75', self.env(rumble='75'))
         self.assertIn('TOTK_GYRO=0', self.env(motion='off'))
         self.assertIn('TOTK_RUMBLE_GAIN=1.0', self.env(rumble='33'))   # not a menu value: the default
+
+    def test_second_screen_map_is_north_up_unless_turned(self):
+        # Graphics -> Screen -> Second screen map (both games): North up writes nothing (the default file keeps its
+        # bytes), Rotate with camera one line right after TOTK_COMPANION, which duo_host.cpp applies to the companion
+        # packages' map_rotate flag at start.
+        self.assertFalse(any(l.startswith('TOTK_DUO_MAP_ROTATE') for l in self.env()))
+        self.assertFalse(any(l.startswith('TOTK_DUO_MAP_ROTATE') for l in self.env(duo_map='north')))
+        turned = self.env(duo_map='rotate')
+        self.assertEqual(turned[turned.index('TOTK_COMPANION=1') + 1], 'TOTK_DUO_MAP_ROTATE=1')
+        self.assertIn('TOTK_DUO_MAP_ROTATE=1', self.env(duo_map='rotate', second_screen='off'))
+        self.assertEqual(self.values(self.run_probe('stored duo_map=east')[0])['duo_map'], 'north')
+        wrap = self.values(self.run_probe('step duo_map 1 duo_map=rotate')[0])
+        self.assertEqual(wrap['duo_map'], 'north')
+        self.assertEqual(self.run_probe('preset duo_map=rotate'), self.run_probe('preset'))   # not part of a preset
+
+    def test_second_screen_map_row(self):
+        java = TOTK / 'android/java/com/aure/totk/setup'
+        settings, strings, setup = ((java / n).read_text() for n in ('Settings.java', 'Strings.java', 'SetupActivity.java'))
+        self.assertIn('new Option("duo_map", SCREEN, "north", "north", "rotate")', settings)
+        # next to Second screen on the Screen tab, only where the Eden Duo page is the second screen
+        rows = setup[setup.index('keys.add("second_screen");'):]
+        rows = rows[:rows.index('for (String key : keys) settingRow(list, key);')]
+        self.assertIn('if (!ArtPolicy.used(GameBuild.COMPANION)) keys.add("duo_map");', rows)
+        self.assertIn('case "duo_map": return "Second screen map";', strings)
+        self.assertIn('case "duo_map": return value.equals("rotate") ? "Rotate with camera" : "North up";', strings)
 
     def test_sharpness_follows_the_selected_upscaler_only(self):
         fsr = self.env(upscaler='fsr')

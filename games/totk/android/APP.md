@@ -1497,7 +1497,13 @@ to `runtime/companion_actions.c`, which re-checks and runs it on the game's fram
 companion (the rules, the gate, one request at a time and the device evidence below are unchanged); the page shows
 pending, done, refused or failed. The library calls no game code itself. Touch is on by default in both
 apps (`TOTK_DUO_TOUCH=0` in `totk.env` turns it off; a release build's private game data has no editable `totk.env`, so
-the default is what players get). `TOTK_DUO=0` turns it off, `TOTK_DUO=module` logs the module's values
+the default is what players get). The page's minimap is north up in both apps; the menu's *Graphics → Screen →
+Second screen map* (*North up* / *Rotate with camera*, settings.env `TOTK_DUO_MAP_ROTATE=1`) sets the packages' flag
+`map_rotate` at every start (`duo_host.cpp` `ApplyMapPreference`; the runtime's persisted value of that flag is not
+used, and a change on the page's own settings page, opened by holding the minimap, lasts until the game ends). Breath of
+the Wild's module turns the map with the camera whatever the game's own minimap option is (a local change,
+`duo/vendor/README.md`); Tears of the Kingdom's turns it with Link's facing, as no camera direction is read.
+`TOTK_DUO=0` turns it off, `TOTK_DUO=module` logs the module's values
 instead. The stick LEDs and the shell take the common state from the host's samples (`duo/duo_state.h`, Tears of the
 Kingdom's table) and, until the host has one, without it, or once its sample is older than the app takes (2 s,
 `DUO_STATE_MAX_AGE_MS` = `CompanionState.MAX_AGE_MS`: the host stopped ticking), from `companion_state()` as before. The setup no longer

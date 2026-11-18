@@ -316,6 +316,15 @@ Options: Off, On · Default: **On** (where offered).
 
 <img src="images/set-second-screen.webp" width="640" alt="Second screen">
 
+#### Second screen map
+
+How the round minimap on the second screen turns. North up keeps north at the top; only your arrow turns. Rotate with
+camera turns the map so that the way you look is up, like the game's own rotating minimap; in Tears of the Kingdom it
+turns with Link's facing (the camera's direction is not read yet), which matches while he runs. Holding the minimap on
+the second screen opens the same choice for the current game only. Shown next to *Second screen*.
+
+Options: North up, Rotate with camera · Default: **North up**.
+
 </details>
 
 <details>

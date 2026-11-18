@@ -136,6 +136,7 @@ The options were written for Tears of the Kingdom and most are untested with Bre
 | Frame generation | *Lossless Scaling* uses the LSFG engine from your own `Lossless.dll`, imported once under *Game data → Lossless Scaling DLL*; the app does not include it |
 | Console mode | Handheld is tested; Docked is untested |
 | Second screen | The Eden Duo companion (below) |
+| Second screen map | North up (default) or Rotate with camera: the companion's minimap turns with the camera whatever the game's own minimap option is |
 
 Developer switches that differ from Tears of the Kingdom (in `totk.env`, see [docs/developer-settings.md](docs/developer-settings.md)):
 

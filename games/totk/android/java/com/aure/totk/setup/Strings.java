@@ -90,6 +90,7 @@ final class Strings {
     static final String WHILE_PLAYING = "Change while playing", SOUND_BUFFER = "Sound buffer", GAME_RESOLUTION = "Game targets";
     static final String STRENGTH = "Strength";
     static final String WHEN_STARTS = "when the game starts";
+    static final String NEEDS_SECOND_SCREEN = "Needs Second screen on";
     static final String LOCKED_FRAMEGEN = "Set by frame generation";
     static String latencyConstraint(Settings settings) {
         return "40".equals(settings.get("frame_rate")) ? "Fixed for 40 fps"
@@ -147,6 +148,7 @@ final class Strings {
             case "overlay": return "Performance overlay";
             case "overlay_pos": return "Overlay position";
             case "second_screen": return "Second screen";
+            case "duo_map": return "Second screen map";
             case "buttons": return "Button layout";
             case "audio_latency": return "Audio latency";
             case "game_language": return "Game language";
@@ -171,6 +173,7 @@ final class Strings {
             case "overlay": return "Frame rate and frame time while you play";
             case "overlay_pos": return "Corner of the screen";
             case "second_screen": return "Map, inventory and shortcuts on the lower display";
+            case "duo_map": return "North up, or turning with the camera";
             case "buttons": return "Which face button is the Switch's A";
             case "audio_latency": return "Low · Balanced · Safe";
             case "game_language": return "Text and voices in the game";
@@ -215,6 +218,11 @@ final class Strings {
             case "overlay_pos": return "Which corner of the screen the performance overlay sits in.";
             case "second_screen": return "On handhelds with a second display, shows the map, inventory and shortcuts on it while you "
                     + "play. Needs the second-screen art prepared during setup.";
+            case "duo_map": return "How the round minimap on the second screen turns. North up keeps north at the top; "
+                    + "only your arrow turns. Rotate with camera turns the map so that the way you look is up, like the "
+                    + "game's own rotating minimap. In Tears of the Kingdom it turns with Link's facing instead (the "
+                    + "camera's direction is not read yet), which matches while he runs. Holding the minimap on the "
+                    + "second screen changes it for the current game only.";
             case "buttons": return "Nintendo: every button does what its label says, so A is A. Xbox: buttons act by position like on a "
                     + "Switch, so the right-hand button is A even though it is labelled B. Choose Xbox for gamepads with Xbox labels.";
             case "audio_latency": return "How much sound is queued before it plays. Low reacts fastest; Safe avoids crackling on busy "
@@ -240,6 +248,7 @@ final class Strings {
             case "overlay_pos":
                 switch (value) { case "tl": return "Top left"; case "tr": return "Top right"; case "bl": return "Bottom left"; default: return "Bottom right"; }
             case "buttons": return value.equals("xbox") ? "Xbox" : "Nintendo";
+            case "duo_map": return value.equals("rotate") ? "Rotate with camera" : "North up";
             case "game_language": return languageName(value);
             case "rumble": return value.equals("0") ? "Off" : value + " %";
             default: return value.isEmpty() ? value : Character.toUpperCase(value.charAt(0)) + value.substring(1);
@@ -285,6 +294,7 @@ final class Strings {
     static final String DIAG_HANDHELD_RES = "Handheld · up to 1280 × 720", DIAG_DOCKED_RES = "Docked · up to 1920 × 1080";
     static final String DIAG_HUD_TEXT = "Sample caption 123", DIAG_NATIVE = "panel resolution", DIAG_ENLARGED = "enlarged";
     static final String DIAG_OFF = "off", DIAG_NO_SECOND = "No second display on this device right now";
+    static final String DIAG_NORTH = "N";
     static final String DIAG_ACTS_AS_A_LABEL = "A is A", DIAG_ACTS_AS_A_POS = "acts as A";
     static String waiting(int n) { return n == 1 ? "1 picture may wait" : n + " pictures may wait"; }
     static String buffer(int ms) { return ms + " ms queued"; }
