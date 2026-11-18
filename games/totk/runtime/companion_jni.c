@@ -151,6 +151,7 @@ size_t runtime_companion_item_result(int seq, char *out, size_t cap);
 unsigned runtime_companion_item_actions(int key, int slot, CompanionAction out[3]) {
     if (!native_enabled(NULL, NULL)) return 0;
     actions_ready();
+    if (key == COMPANION_SAGES) return companion_sage_actions(slot, out);   /* the Sage powers switches; slot = the sage */
     CompanionView v;
     if (!companion_view((uintptr_t)runtime_module_base("main"), guest_read, key, slot, &v)) return 0;
     return companion_item_actions(key, &v, out);   /* also keeps the frame-end refresh running (watch) */

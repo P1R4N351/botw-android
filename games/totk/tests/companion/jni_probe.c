@@ -106,6 +106,7 @@ int companion_view(uintptr_t main_base, companion_read_fn rd, int key, int slot,
     return 0;
 }
 unsigned companion_item_actions(int key, const CompanionView *v, CompanionAction out[3]) { (void)key; (void)v; (void)out; return 0; }
+unsigned companion_sage_actions(int sage, CompanionAction out[3]) { (void)sage; (void)out; return 0; }
 void companion_action_state(int *ok, const char **reason, int *pause_menu, int *aiming) {
     *ok = 0; *reason = "stale"; *pause_menu = 0; *aiming = 0;
 }

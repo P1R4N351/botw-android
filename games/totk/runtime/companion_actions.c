@@ -11,7 +11,10 @@
      within the timeout ends as "failed".
    - Every called game function is identified first: SHA-256 of its first 64 bytes, checked once per mapping of main.
      Any mismatch and nothing is called ("unsupported").
-   - Only device-verified actions are offered (VERIFIED below); every other one reports "notAvailableYet". */
+   - Only device-verified actions are offered (VERIFIED below); every other one reports "notAvailableYet".
+   - The sages (the Eden Duo page's Sage powers switches; pseudo-key COMPANION_SAGES, the slot is the sage): summon and
+     dismiss exactly as the pause menu's Key Items does (PauseMenu::doAction main+0x2173d18, see APP.md "Sage powers"),
+     the same gates, one request at a time, read back afterwards. Not offered until device-checked (verified_sages). */
 #include "companion.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -63,6 +66,7 @@ void companion_sha256_hex(const void *data, size_t n, char out[65]) {
 enum {
     F_EQUIP, F_UNEQUIP, F_IS_EQUIPPED, F_CAN_USE, F_EAT, F_TAKE_OUT, F_CAN_HOLD_MATERIAL, F_CAN_HOLD_ZONAI, F_INFO, F_AIM,
     F_COMPONENT, F_BATTERY_TYPE, F_FLAG_BOOL, F_ENERGY_MAX, F_RECHARGE, F_REFILL,
+    F_SAGE_TYPE, F_SAGE_PREP, F_SAGE_SUMMON, F_SAGE_DISMISS, F_SAGE_SET, F_SAGE_GET,
     F_CALLED,   /* the rest are only reached through the ones above; checked as well so the whole path is the known one */
 };
 static const struct { uint32_t off; const char *sha64; } FN[] = {
@@ -83,6 +87,14 @@ static const struct { uint32_t off; const char *sha64; } FN[] = {
     [F_ENERGY_MAX] = {0x1cce94c, "58f09c881812304c22aa32fe3d3bafd0d15f15d64b58914bbee72bf4fdd9bee2"},       /* float (battery+0x18) */
     [F_RECHARGE] = {0x1fa4e44, "d866d4e1d745f9257318d3d325714aa3241b8c5de7f16ceb7e449dbc068221ac"},         /* (float amount, battery) */
     [F_REFILL] = {0x1fa4fec, "0dcba5ce96fe243c89ec21efaf05a6dcb6440fc3f5e0027cd8d1e77bfa8b5fe9"},           /* (battery, 1): to full */
+    /* the pause menu's sage cases (doAction main+0x2173d18, jump table 0x2d17292 cases 15-24); hashes of the Thor's
+       rewritten main, whose bytes at the 24 entries above match the original's (study 2026-11-17, re-checked) */
+    [F_SAGE_TYPE] = {0xc1eb14, "7ec8363e69a35395fe4820b37a95c13ca5ab63687d1d80b3c62b9051d9c080f8"},         /* CompanionMgr's type id */
+    [F_SAGE_PREP] = {0x1fa1e20, "443ba90b6e6693ff2b3c882ec138c31af1f3a9378e24df4033fed54edac4013e"},        /* (mgr, i): mask bit i */
+    [F_SAGE_SUMMON] = {0xc6c700, "ccde563f82891fa55119106e1614752ffb466193b1386f779065a6a09749729d"},       /* (mgr, i, from menu) */
+    [F_SAGE_DISMISS] = {0x1fa1658, "6c4563fddf4e4b63f498da632bbbb492872acd1dd009de73d46d4b24bb6ee203"},      /* (mgr, i, from menu) */
+    [F_SAGE_SET] = {0x1fa1c60, "f7f906a903d4bacde04ac67aa02a72a36bc3d92631754d4cd97e582002bd3ae0"},          /* (mgr, i, b): IsSummon */
+    [F_SAGE_GET] = {0x1fa1d38, "9dcaa562cb90df32f72396570e5e89c44a2729f43d06509c92c5c3d65c1614fe"},          /* bool (mgr, i): IsSummon */
     {0x20af2b4, "fd96ec7629dfd3b9cff687a1139817db4a0cc2b0ec05bdc287fc4543b6594c9c"},   /* eat food */
     {0x20af1b8, "94485937003241e220585608901e5d592dada08e5e04e5273f70db9f0dace3e5"},   /* eat material */
     {0x20b356c, "df9e085f828c0894378a77a24520b0bdfb66b595b04ae40f99baa59711287a8c"},   /* consume: effects, stock -1 */
@@ -91,6 +103,7 @@ static const struct { uint32_t off; const char *sha64; } FN[] = {
     {0x20a8ad0, "1e87a3272499d67440778674d3b64ecce42e89376578b00563bc453b4d655852"},   /* equip shield */
     {0x20a7680, "eb3fd5f7f1afabcca88285a4493012a2d1972eaf4436d92d273780d6cd2ca21b"},   /* take out a Zonai device */
     {0x20a6af8, "26e8b5ae557b285190a78ca9fa86dc2eb80be83b370092f10448fe8df66d8512"},   /* take out a material */
+    {0xc6d214, "37695330f01e2f3fdcd13a7ebaa1a1391a9787ebd89f3b5d4d4fc71e20f624bd"},    /* CompanionMgr's typed query (vtable[0]) */
 };
 enum { FN_COUNT = sizeof FN / sizeof *FN, PROLOGUE = 64 };
 enum {
@@ -104,13 +117,24 @@ enum {
     BAT_GAUGE = 0x18, BAT_ENERGY = 0x54, BAT_RESERVE = 0x58,          /* max-energy gauge (F_ENERGY_MAX), energy, reserve */
     BAT_TIME_FLAGS = 0xe8, BAT_TIME = 0xec, BAT_TIME_LEFT = 0xf0, BAT_TIME_RATE = 0xf4, BAT_TIME_SHOWN = 0xdc, BAT_TIME_PHASE = 0xd4,
     ENERGY_LIMIT = 0x2d01940, ENERGY_RESERVE_CAP = 0x2cf6528,         /* the floats the full check compares with */
+    /* the sages: player component 0x12 is CompanionMgr when its typed query (vtable[0]) is exactly main+SAGE_QUERY */
+    SAGE_COMPONENT = 0x12, SAGE_QUERY = 0xc6d214,
+    SAGE_ENV = 0x158,                                                 /* u8: summoning allowed here (the menu's grey-out) */
+    SAGE_MASK = 0x160,                                                /* u8: bit i set by prep, cleared by dismiss */
+    SAGE_LINK = 0x40, SAGE_LINK_STRIDE = 0x18, SAGE_LINK_HANDLE = 0x10, /* avatar actor link; handle -1: none */
+    SAGES_AWAY = 0x1d29c6a7,                                          /* GameData bool: the manager dismisses all five while set */
 };
+enum { SAGES = 5 };
+/* PlayerStatus.Companion.<Wind|Fire|Water|Electric|Soul>.IsGet (full hashes, GameDataList.Product.140) */
+static const uint32_t SAGE_JOINED[SAGES] = {0x463ac522, 0x30351796, 0xf6e42b3b, 0x5b1cd8c0, 0xda6d9225};
+static const char *const SAGE_ID[SAGES] = {"Wind", "Fire", "Water", "Electric", "Soul"};
 enum { BIT_CALC = 0, BIT_WEAPON_CHANGE = 33 };   /* player state +0x658 */
 
 /* ---------- actions ---------- */
-enum { A_EQUIP, A_UNEQUIP, A_EAT, A_DRINK, A_USE, A_HOLD, A_TAKE_OUT, A_FUSE, A_COUNT };
-static const char *const ACTION[A_COUNT] = {"equip", "unequip", "eat", "drink", "use", "hold", "takeOut", "fuseArrow"};
-enum { K_WEAPONS, K_BOWS, K_SHIELDS, K_ARROWS, K_ARMOR, K_MATERIALS, K_FOOD, K_ZONAI, K_KEY_ITEMS };
+enum { A_EQUIP, A_UNEQUIP, A_EAT, A_DRINK, A_USE, A_HOLD, A_TAKE_OUT, A_FUSE, A_SUMMON_SAGE, A_DISMISS_SAGE, A_COUNT };
+static const char *const ACTION[A_COUNT] = {"equip", "unequip", "eat", "drink", "use", "hold", "takeOut", "fuseArrow",
+                                            "summonSage", "dismissSage"};
+enum { K_WEAPONS, K_BOWS, K_SHIELDS, K_ARROWS, K_ARMOR, K_MATERIALS, K_FOOD, K_ZONAI, K_KEY_ITEMS, K_SAGES = COMPANION_SAGES };
 #define BIT(a) (1u << (a))
 /* What the device checks proved, per pouch key: an action is offered in the world (game unpaused) only when its bit
    is set here (android/APP.md "Dual-screen companion" lists the evidence). Not proven: "notAvailableYet". */
@@ -130,9 +154,13 @@ static unsigned verified_in_world[COMPANION_CATS] = {
 /* PouchUseType (actor info +0x98) -> the pause menu's button */
 enum { USE_NONE, USE_EAT, USE_DRINK, USE_FAIRY, USE_ENERGY };
 static unsigned verified_use = BIT(USE_FAIRY);   /* not yet: BIT(USE_ENERGY) */
+/* The sages' summon and dismiss: not run on a device yet (APP.md "Sage powers" lists the checks), so "notAvailableYet".
+   Set to 1 once the Thor shows each sage arriving and leaving, Key Items agreeing, and the state surviving a reload. */
+static int verified_sages = 0;
 #ifdef COMPANION_ACTIONS_TEST
 void companion_actions_test_verify(int key, unsigned mask) { verified_in_world[key] = mask; }
 void companion_actions_test_verify_use(unsigned mask) { verified_use = mask; }
+void companion_actions_test_verify_sages(int on) { verified_sages = on; }
 #endif
 
 static int use_kind(const char *s) {
@@ -169,6 +197,8 @@ static struct {
     int has_battery; uint64_t battery; float energy, energy_max, energy_reserve, energy_limit, reserve_cap[2];
     /* the world has been "ok" since settle_at / settle_frame with this player actor and pouch partition (settled 0: not ok) */
     int settled; uint64_t settle_at, settle_frame, settle_actor; unsigned settle_part;
+    /* the sages, read while someone looks at them (sage_until): CompanionMgr (0: none), its env byte, the away flag */
+    uint64_t sage_until, sage_mgr; int sage_env, sages_away, sage_joined[SAGES], sage_summoned[SAGES];
 } st = {.reason = "stale"};
 static Info infos[MAX_INFO]; static unsigned ninfos;
 static Request req;
@@ -288,16 +318,70 @@ long long companion_pouch_gen(uint64_t ident) {
     return g;
 }
 
+static const char *key_name(int key) { return key == K_SAGES ? "sages" : companion_category_key(key); }
 static void finish(const char *state, const char *reason) {
     req.phase = PH_NONE; req.state = state; req.reason = reason;
-    fprintf(stderr, "[companion] request %d %s %s/%d %s: %s%s%s\n", req.seq, ACTION[req.action], companion_category_key(req.key),
+    fprintf(stderr, "[companion] request %d %s %s/%d %s: %s%s%s\n", req.seq, ACTION[req.action], key_name(req.key),
             req.slot, req.actor, state, *reason ? " " : "", reason);
+}
+
+/* ---------- the sages ---------- */
+/* One sage's switch: dismiss while it is with Link, summon otherwise, by the state of the last tick. The gates in the
+   order the game would decide: the game state, CompanionMgr there, joined (IsGet), the away flag, the place (the menu's
+   own grey-out, CompanionMgr+0x158), then whether the action is proven on a device. Not checked (the menu does not
+   either): cooldown, JoiningCondition. Caller holds the lock. */
+static unsigned sage_rules(int i, CompanionAction out[1]) {
+    const int on = st.sage_summoned[i];
+    const char *why = st.guard < 0 ? "unsupported" : *st.reason ? st.reason : !st.sage_mgr ? "notNow"
+                      : !st.sage_joined[i] ? "notJoined" : st.sages_away ? "sagesSuppressed"
+                      : !st.sage_env ? "sageUnavailableHere" : !verified_sages ? "notAvailableYet" : "";
+    out[0] = (CompanionAction){ACTION[on ? A_DISMISS_SAGE : A_SUMMON_SAGE], !*why, why};
+    return 1;
+}
+unsigned companion_sage_actions(int sage, CompanionAction out[3]) {
+    if (sage < 0 || sage >= SAGES) return 0;
+    pthread_mutex_lock(&lock);
+    watch();
+    st.sage_until = now() + WATCH_MS;   /* the next ticks read the sages */
+    unsigned n = sage_rules(sage, out);
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+/* category "sages": slot = the sage, actor = its id, partition = what the page showed (1 with Link). */
+static int sage_request(uintptr_t main_base, const char *action, int sage, const char *actor, int shown) {
+    int a = !action ? -1 : !strcmp(action, ACTION[A_SUMMON_SAGE]) ? A_SUMMON_SAGE : !strcmp(action, ACTION[A_DISMISS_SAGE]) ? A_DISMISS_SAGE : -1;
+    if (a < 0 || sage < 0 || sage >= SAGES || !actor || strcmp(actor, SAGE_ID[sage]) || shown != (a == A_DISMISS_SAGE))
+        return COMPANION_INVALID;
+    if (!env.rd || !env.call) return COMPANION_UNSUPPORTED;
+    CompanionView v;
+    int ready = companion_view(main_base, env.rd, -1, 0, &v);
+    pthread_mutex_lock(&lock);
+    int r;
+    if (st.guard < 0 || !strcmp(v.status, "unsupported")) r = COMPANION_UNSUPPORTED;
+    else if (req.phase) r = COMPANION_BUSY;
+    else {
+        CompanionAction act[1];
+        sage_rules(sage, act);
+        if (!ready || !act[0].enabled) r = COMPANION_REFUSED;
+        else {
+            r = req.seq = ++last_seq;
+            req.action = a; req.key = K_SAGES; req.slot = sage; req.part = shown; req.main = main_base;
+            snprintf(req.actor, sizeof req.actor, "%s", actor);
+            req.ident = 0; req.t_queued = now(); req.phase = PH_QUEUED; req.state = "pending"; req.reason = "";
+            st.sage_until = now() + WATCH_MS;
+            if (act[0].id != ACTION[a]) finish("refused", "stateChanged");   /* the game no longer shows what the page did */
+            else wake(1);
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return r;
 }
 
 int companion_request(uintptr_t main_base, const char *action, const char *category, int slot, const char *actor,
                       int partition, long long pouch_gen) {
+    if (category && !strcmp(category, "sages")) return sage_request(main_base, action, slot, actor, partition);
     int a = -1, key = category ? companion_category(category) : -1;
-    for (int i = 0; action && i < A_COUNT; i++) if (!strcmp(action, ACTION[i])) a = i;
+    for (int i = 0; action && i < A_FUSE + 1; i++) if (!strcmp(action, ACTION[i])) a = i;   /* the item actions */
     size_t len = actor ? strlen(actor) : 0;
     if (a < 0 || key < 0 || slot < 0 || slot > 254 || !len || len >= COMPANION_NAME || partition < 0 || partition > 1 || pouch_gen <= 0)
         return COMPANION_INVALID;
@@ -389,6 +473,25 @@ static uint64_t battery(void) {
     if (!query || query < st.main || query >= st.main + MAIN_TEXT) return 0;
     return env.call(query, comp, game(F_BATTERY_TYPE, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0);
 }
+/* CompanionMgr, the way the menu finds it (main+0x2173f60..0x2173f94): player component SAGE_COMPONENT, whose typed
+   query (vtable slot 0) must be exactly CompanionMgr's own, asked for CompanionMgr's type. 0: none. */
+static uint64_t sage_mgr(void) {
+    uint64_t player = rd64(st.main + PLAYER_SLOT);
+    uint64_t comp = player ? game(F_COMPONENT, player, SAGE_COMPONENT, 0, 0, 0, 0) : 0;
+    uint64_t query = comp ? rd64(rd64(comp)) : 0;
+    if (!query || query != st.main + SAGE_QUERY) return 0;
+    return env.call(query, comp, game(F_SAGE_TYPE, 0, 0, 0, 0, 0, 0), 0, 0, 0, 0);
+}
+static void read_sages(void) {
+    st.sage_mgr = sage_mgr();
+    uint8_t on = 0;
+    st.sage_env = st.sage_mgr && env.rd(st.sage_mgr + SAGE_ENV, &on, 1) && on;
+    st.sages_away = game_bool(F_FLAG_BOOL, SAGES_AWAY, 0, 0, 0);
+    for (int i = 0; i < SAGES; i++) {
+        st.sage_joined[i] = game_bool(F_FLAG_BOOL, SAGE_JOINED[i], 0, 0, 0);
+        st.sage_summoned[i] = st.sage_mgr && game_bool(F_SAGE_GET, st.sage_mgr, (uint64_t)i, 0, 0);
+    }
+}
 static void refresh(CompanionView *v, uint64_t frame) {
     companion_view(st.main, env.rd, -1, 0, v);
     st.reason = st.guard < 0 ? "unsupported" : state_reason(v);
@@ -414,9 +517,11 @@ static void refresh(CompanionView *v, uint64_t frame) {
                             env.rd(st.main + ENERGY_LIMIT, &st.energy_limit, 4) && env.rd(st.main + ENERGY_RESERVE_CAP, st.reserve_cap, 8)))
             st.battery = 0;
         if (st.battery) st.energy_max = env.call_f(st.main + FN[F_ENERGY_MAX].off, st.battery + BAT_GAUGE, 0);
+        if (now() < st.sage_until || (req.phase && req.key == K_SAGES)) read_sages();
     } else {
         st.aim_mode = st.hold_material = st.hold_zonai = st.arrows = st.has_battery = 0;
         st.battery = 0;
+        st.sage_mgr = 0;
     }
     st.aiming = st.aim_mode;
     st.at = now();
@@ -456,8 +561,57 @@ static int recharge(const Info *f) {
     } else env.call_f(st.main + FN[F_RECHARGE].off, bat, (float)f->energy);
     return 1;
 }
+/* A queued sage request, re-checked on this thread with fresh reads, then the menu's own sequence: summon = prep, summon,
+   set IsSummon 1; dismiss = dismiss, set IsSummon 0 (the third argument 1, as from the menu, only adds the game's own
+   play report). The menu's screen icon and the close-time reaction are left out (cosmetic). */
+static void run_sage(uint64_t frame) {
+    const int i = req.slot;
+    if (*st.reason) { finish("refused", st.reason); return; }
+    if (req.main != st.main) { finish("failed", "teardown"); return; }
+    uint64_t mgr = sage_mgr();
+    uint8_t place = 0;
+    if (!mgr) { finish("refused", "notNow"); return; }
+    if (!game_bool(F_FLAG_BOOL, SAGE_JOINED[i], 0, 0, 0)) { finish("refused", "notJoined"); return; }
+    if (game_bool(F_FLAG_BOOL, SAGES_AWAY, 0, 0, 0)) { finish("refused", "sagesSuppressed"); return; }
+    if (!env.rd(mgr + SAGE_ENV, &place, 1) || !place) { finish("refused", "sageUnavailableHere"); return; }
+    if (!verified_sages) { finish("refused", "notAvailableYet"); return; }
+    if (game_bool(F_SAGE_GET, mgr, (uint64_t)i, 0, 0) != req.part) { finish("refused", "stateChanged"); return; }
+    if (req.action == A_SUMMON_SAGE) {
+        game(F_SAGE_PREP, mgr, (uint64_t)i, 0, 0, 0, 0);
+        game(F_SAGE_SUMMON, mgr, (uint64_t)i, 1, 0, 0, 0);
+        game(F_SAGE_SET, mgr, (uint64_t)i, 1, 0, 0, 0);
+    } else {
+        game(F_SAGE_DISMISS, mgr, (uint64_t)i, 1, 0, 0, 0);
+        game(F_SAGE_SET, mgr, (uint64_t)i, 0, 0, 0, 0);
+    }
+    fprintf(stderr, "[companion] request %d %s sages/%d %s: called frame %llu thread %ld\n", req.seq, ACTION[req.action], i,
+            req.actor, (unsigned long long)frame, tid());
+    req.phase = PH_CALLED; req.t_called = now(); req.frame_called = frame;
+}
+/* The outcome: IsSummon reads back through the game's own getter once GameData commits it (a later frame). A dismiss
+   is "done" when the avatar has left (link handle -1, mask bit i clear); when the game only changed the flag (its
+   dismiss returns early for some avatars) the request ends "done" with reason "flagOnly" once the time is up. */
+static void read_back_sage(uint64_t frame) {
+    if (frame <= req.frame_called) return;
+    const int i = req.slot;
+    uint64_t mgr = sage_mgr();
+    int32_t handle = -1; uint8_t mask = 0;
+    int on = mgr ? game_bool(F_SAGE_GET, mgr, (uint64_t)i, 0, 0) : -1;
+    if (mgr) { env.rd(mgr + SAGE_LINK + (uint64_t)i * SAGE_LINK_STRIDE + SAGE_LINK_HANDLE, &handle, 4); env.rd(mgr + SAGE_MASK, &mask, 1); }
+    int present = handle != -1 || (mask >> i & 1);
+    int late = now() - req.t_called > READBACK_MS && frame - req.frame_called >= READBACK_FRAMES;
+    if (req.action == A_SUMMON_SAGE && on == 1) {
+        fprintf(stderr, "[companion] request %d summonSage sages/%d: IsSummon 1, avatar %s, mask bit %d\n", req.seq, i,
+                handle != -1 ? "linked" : "not linked yet", mask >> i & 1);
+        finish("done", "");
+    } else if (req.action == A_DISMISS_SAGE && on == 0 && (!present || late)) finish("done", present ? "flagOnly" : "");
+    else if (!mgr && !strcmp(st.reason, "title")) finish("failed", "teardown");
+    else if (late) finish("failed", "timeout");   /* never retried */
+}
+
 /* Run the queued request: everything re-checked with fresh reads on this thread, then exactly one game call. */
 static void run(uint64_t frame) {
+    if (req.key == K_SAGES) { run_sage(frame); return; }
     CompanionView v;
     companion_view(st.main, env.rd, req.key, req.slot, &v);
     if (*st.reason) { finish("refused", st.reason); return; }
@@ -505,6 +659,7 @@ static void run(uint64_t frame) {
 }
 /* The outcome, from the game state on a later frame. */
 static void read_back(uint64_t frame) {
+    if (req.key == K_SAGES) { read_back_sage(frame); return; }
     if (frame <= req.frame_called) return;
     CompanionView v;
     int ready = companion_view(st.main, env.rd, req.key, req.slot, &v);

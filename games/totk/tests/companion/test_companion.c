@@ -115,19 +115,27 @@ static void swap_hook(uint64_t a) {
 
 /* ---------- fake game functions for the item actions (companion_actions.c) ---------- */
 void companion_actions_test_verify(int key, unsigned mask);
+void companion_actions_test_verify_sages(int on);
 void companion_actions_test_sha256(const void *m, size_t n, char out[65]);
 void companion_actions_test_expect_prologues(uintptr_t main_base);
 void companion_snapshot_test_expect_guard(const void *words, size_t n);
 /* the functions the actions call or check, by main offset; the test fills each with its own stand-in bytes */
 static const uint32_t FN_OFF[] = {0x20a1128, 0x20a9a28, 0x20ac5c4, 0x20ac080, 0x20af148, 0x20afab4, 0x20affa8, 0x20aff18,
     0x63307c, 0x711000, 0x20af2b4, 0x20af1b8, 0x20b356c, 0x20a837c, 0x20a871c, 0x20a8ad0, 0x20a7680, 0x20a6af8,
-    0x89f9b0, 0xc1ee50, 0x3d01a0, 0x1cce94c, 0x1fa4e44, 0x1fa4fec};
+    0x89f9b0, 0xc1ee50, 0x3d01a0, 0x1cce94c, 0x1fa4e44, 0x1fa4fec,
+    0xc1eb14, 0x1fa1e20, 0xc6c700, 0x1fa1658, 0x1fa1c60, 0x1fa1d38, 0xc6d214};   /* the sages' (CompanionMgr) */
 static struct {
     uint8_t *main, *pouch, *fruit, *dish;
     int32_t *weapon_equip, *food_stock, *mat_stock;
     int aim, stuck, arrows, saving, pending, calls, equips, eats, takeouts;
     uint64_t now;
+    /* the sages: the player, its component 0x12 and CompanionMgr; IsGet, IsSummon, the away flag, the game's calls */
+    uint8_t *player, *comp, *mgr;
+    int joined[5], summoned[5], away, sage_stick;
+    char sage_calls[64];
 } T;
+static const uint32_t SAGE_IS_GET[5] = {0x463ac522, 0x30351796, 0xf6e42b3b, 0x5b1cd8c0, 0xda6d9225};
+static void sage_link(int i, int32_t handle) { memcpy(T.mgr + 0x40 + i * 0x18 + 0x10, &handle, 4); }
 static uint64_t fake_call(uint64_t fn, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     (void)a4; (void)a5;
     T.calls++;
@@ -149,7 +157,20 @@ static uint64_t fake_call(uint64_t fn, uint64_t a0, uint64_t a1, uint64_t a2, ui
         return !strcmp(name, "Item_Fruit_A") ? (uintptr_t)T.fruit : !strncmp(name, "Item_Cook_", 10) ? (uintptr_t)T.dish : 0;
     }
     case 0x711000: return T.aim;
-    case 0x3d01a0: return 0;                                                                                     /* no battery yet */
+    case 0x3d01a0:                                                                                               /* GameData bool */
+        for (int i = 0; i < 5; i++) if (a0 == SAGE_IS_GET[i]) return T.joined[i];
+        return a0 == 0x1d29c6a7 ? (uint64_t)T.away : 0;                                                          /* no battery yet */
+    case 0x89f9b0: return a0 == (uintptr_t)T.player && a1 == 0x12 ? (uintptr_t)T.comp : 0;                       /* component */
+    case 0xc1eb14: return 77;                                                                                    /* CompanionMgr type */
+    case 0xc6d214: return a0 == (uintptr_t)T.comp && a1 == 77 ? (uintptr_t)T.mgr : 0;                           /* typed query */
+    case 0x1fa1d38: return a0 == (uintptr_t)T.mgr && a1 < 5 ? (uint64_t)T.summoned[a1] : 0;                     /* IsSummon */
+    case 0x1fa1e20: strcat(T.sage_calls, "prep "); T.mgr[0x160] |= (uint8_t)(1u << a1); return 0;
+    case 0xc6c700: strcat(T.sage_calls, a2 == 1 ? "summon " : "summon? "); sage_link((int)a1, 5); return 0;
+    case 0x1fa1c60: strcat(T.sage_calls, a2 ? "set1 " : "set0 "); T.summoned[a1] = (int)a2; return 0;
+    case 0x1fa1658:                                                                                              /* dismiss */
+        strcat(T.sage_calls, a2 == 1 ? "dismiss " : "dismiss? ");
+        if (!T.sage_stick) { sage_link((int)a1, -1); T.mgr[0x160] &= (uint8_t)~(1u << a1); }
+        return 0;
     default: fprintf(stderr, "FAIL: unexpected game call main+%#llx\n", (unsigned long long)(fn - (uintptr_t)T.main)); exit(1);
     }
 }
@@ -557,6 +578,65 @@ int main(void) {
     check(companion_request(M, "equip", "weapons", 0, "Weapon_Sword_001", 1, gen) == COMPANION_UNSUPPORTED, "hash mismatch: unsupported");
     check(T.equips == equips && T.eats == 1, "nothing called after the mismatch");
     main_[FN_OFF[4] + 3] ^= 1;
+
+    /* ---------- the sages: the Sage powers switches (summonSage / dismissSage) ---------- */
+    companion_tick(0, f++);   /* a fresh mapping, checked afresh */
+    /* the player the actions take, *(main + 0x3add238) (here the scene module the reader also walks from that slot) */
+    T.player = module; T.comp = alloc(0x40); T.mgr = alloc(0x200);
+    uint8_t *vt = alloc(0x40);
+    put64(T.comp, (uintptr_t)vt); put64(vt, (uintptr_t)main_ + 0xc6d214);
+    T.mgr[0x158] = 1;                                     /* summoning allowed here */
+    for (int i = 0; i < 5; i++) sage_link(i, -1);
+    T.joined[0] = T.joined[2] = 1;
+    settle(M, &f);
+    CompanionAction sa[3];
+    check(companion_sage_actions(5, sa) == 0 && companion_sage_actions(-1, sa) == 0, "five sages only");
+    companion_sage_actions(0, sa); tick(M, &f);           /* asking makes the ticks read the sages */
+    check(companion_sage_actions(0, sa) == 1 && !strcmp(sa[0].id, "summonSage") && !sa[0].enabled &&
+          !strcmp(sa[0].reason, "notAvailableYet"), "sages: not offered until checked on a device");
+    companion_sage_actions(1, sa);
+    check(!strcmp(sa[0].reason, "notJoined"), "sages: one who has not joined");
+    check(companion_request(M, "summonSage", "sages", 0, "Wind", 0, 1) == COMPANION_REFUSED, "sages: unverified refused");
+    check(!T.sage_calls[0], "sages: nothing called");
+    companion_actions_test_verify_sages(1);
+    companion_sage_actions(0, sa);
+    check(sa[0].enabled && !strcmp(sa[0].reason, ""), "sages: offered once verified");
+    check(companion_request(M, "summonSage", "sages", 0, "Fire", 0, 1) == COMPANION_INVALID, "sages: another sage's id");
+    check(companion_request(M, "summonSage", "sages", 0, "Wind", 1, 1) == COMPANION_INVALID, "sages: summon what shows with Link");
+    check(companion_request(M, "summonSage", "sages", 5, "Wind", 0, 1) == COMPANION_INVALID, "sages: a sixth");
+    check(companion_request(M, "equip", "sages", 0, "Wind", 0, 1) == COMPANION_INVALID, "sages: an item action");
+    T.mgr[0x158] = 0; companion_sage_actions(0, sa); tick(M, &f); companion_sage_actions(0, sa);
+    check(!strcmp(sa[0].reason, "sageUnavailableHere"), "sages: the menu's own grey-out");
+    T.mgr[0x158] = 1; T.away = 1; tick(M, &f); companion_sage_actions(0, sa);
+    check(!strcmp(sa[0].reason, "sagesSuppressed"), "sages: away");
+    T.away = 0; tick(M, &f);
+    seq = companion_request(M, "summonSage", "sages", 0, "Wind", 0, 1);
+    check(seq > 0, "sages: summon accepted");
+    tick(M, &f);
+    check(!strcmp(T.sage_calls, "prep summon set1 "), "sages: the menu's order: prep, summon (from menu), IsSummon 1");
+    tick(M, &f); result_is(seq, "done", "");
+    check(T.summoned[0] && (T.mgr[0x160] & 1), "sages: with Link");
+    /* the page still showed Off: the game disagrees now, nothing is called */
+    T.sage_calls[0] = 0; companion_sage_actions(0, sa); tick(M, &f);
+    seq = companion_request(M, "summonSage", "sages", 0, "Wind", 0, 1);
+    result_is(seq, "refused", "stateChanged"); tick(M, &f);
+    check(!T.sage_calls[0], "sages: a stale tap calls nothing");
+    seq = companion_request(M, "dismissSage", "sages", 0, "Wind", 1, 1);
+    tick(M, &f);
+    check(!strcmp(T.sage_calls, "dismiss set0 "), "sages: dismiss (from menu), IsSummon 0");
+    tick(M, &f); result_is(seq, "done", "");
+    /* a dismiss the game only flags (its early return): done, "flagOnly", once the read-back time is up */
+    seq = companion_request(M, "summonSage", "sages", 0, "Wind", 0, 1); tick(M, &f); tick(M, &f); result_is(seq, "done", "");
+    T.sage_stick = 1; T.sage_calls[0] = 0;
+    seq = companion_request(M, "dismissSage", "sages", 0, "Wind", 1, 1);
+    tick(M, &f); tick(M, &f); result_is(seq, "pending", "");
+    T.now += 2500; f += 25; tick(M, &f); result_is(seq, "done", "flagOnly");
+    T.sage_stick = 0; settle(M, &f);   /* the 2.5 s without ticks above starts the settling over */
+    /* no CompanionMgr (the player's component is another one): not now */
+    put64(vt, (uintptr_t)main_ + 0xc6d218); companion_sage_actions(2, sa); tick(M, &f); companion_sage_actions(2, sa);
+    check(!strcmp(sa[0].reason, "notNow"), "sages: CompanionMgr is only taken by its own query");
+    put64(vt, (uintptr_t)main_ + 0xc6d214);
+    companion_actions_test_verify_sages(0);
 
     /* a freed manager: the reader reports the game as starting instead of reading through it */
     put64(main_ + GDM_SLOT, 0x10);
