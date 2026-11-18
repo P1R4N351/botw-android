@@ -18,8 +18,8 @@ public final class GameBuild {
     /** The app flavours of this game by package (games.toml [flavour]): {package, repository, release tag prefix,
      *  release asset prefix}. The repository is About > Project and the one the update check asks (UpdateRules.Release). */
     public static final String[][] RELEASES = {
-        {"io.github.kurigohankamehameha.totk", "https://github.com/P1R4N351/totk-android", "v", "TotK-Native-"},
-        {"io.github.kurigohankamehameha.totk.dev", "https://github.com/P1R4N351/totk-android", "v", "TotK-Native-"}
+        {"io.github.p1r4n351.totk", "https://github.com/P1R4N351/totk-android", "v", "TotK-Native-"},
+        {"io.github.p1r4n351.totk.dev", "https://github.com/P1R4N351/totk-android", "v", "TotK-Native-"}
     };
     /** Whether the app's own setup can import this game (false: the game folder is filled by hand). */
     public static final boolean ONDEVICE_SETUP = true;

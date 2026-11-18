@@ -172,7 +172,7 @@ class AndroidUpdateTests(unittest.TestCase):
         rows = [row for g in data['games'] for row in games.releases(g, data)]
         repos = {row[0]: row[1] for row in rows}
         self.assertEqual(repos['io.github.p1r4n351.botw'], 'https://github.com/P1R4N351/botw-android')
-        self.assertEqual(repos['io.github.kurigohankamehameha.totk'], 'https://github.com/P1R4N351/totk-android')
+        self.assertEqual(repos['io.github.p1r4n351.totk'], 'https://github.com/P1R4N351/totk-android')
         self.assertNotIn('AurelioB', ' '.join(repos.values()))
         self.probe('flavours', *(x for row in rows for x in row))
         for g in data['games']:   # GameBuild carries the game's rows
