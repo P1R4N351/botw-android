@@ -44,8 +44,8 @@ Flavours (`build_release.py --game <game> --flavour <flavour>`):
 
 | Game | Flavour | Package | Launcher label | Version | Code | Key | Repository | Release tag, asset |
 |---|---|---|---|---|---|---|---|---|
-| `totk` | `fork` | `io.github.kurigohankamehameha.totk` | TotK Native (fork) | `1.0.1-fork.4` | 10004 | `fork-release.p12` | KuriGohan-Kamehameha/totk-android | `v<version>`, `TotK-Native-<version>.apk` |
-| `totk` | `dev` | `io.github.kurigohankamehameha.totk.dev` | TotK Native (dev) | `1.0.1-dev` | clock | `totk-dev.pem` | KuriGohan-Kamehameha/totk-android | `v<version>`, `TotK-Native-<version>.apk` |
+| `totk` | `fork` | `io.github.kurigohankamehameha.totk` | TotK Native (fork) | `1.0.1-fork.4` | 10004 | `fork-release.p12` | P1R4N351/totk-android | `v<version>`, `TotK-Native-<version>.apk` |
+| `totk` | `dev` | `io.github.kurigohankamehameha.totk.dev` | TotK Native (dev) | `1.0.1-dev` | clock | `totk-dev.pem` | P1R4N351/totk-android | `v<version>`, `TotK-Native-<version>.apk` |
 | `botw` | `release` | `io.github.p1r4n351.botw` | BotW Native | `0.2.0-pre.1` | 200 | `botw-release.pem` | P1R4N351/botw-android | `botw-v<version>`, `BotW-Native-<version>.apk` |
 | `botw` | `dev` | `io.github.p1r4n351.botw` | BotW Native | `0.2.0-dev` | clock | `botw-dev.pem` | P1R4N351/botw-android | `botw-v<version>`, `BotW-Native-<version>.apk` |
 
@@ -62,7 +62,7 @@ TotK-only scripts (`prepare_runtime.py`, `verify_rewrites.py`, the PC and iOS bu
 |---|---|
 | `common` (P1R4N351/totk-android) | What both apps ship. Builds, releases and fixes start here. |
 | `botw-android` | The BotW line before `common` (kept for history; `common` = it + the fork's work + the variables). |
-| `fork-release` (KuriGohan-Kamehameha/totk-android) | The TotK line before `common`. |
+| `fork-release` (P1R4N351/totk-android) | The TotK line before `common`. |
 | `botw-upstream` = AurelioB/totk-android#54 | Upstreamable subset: BotW support without the GPL Eden Duo companion and the Bifrost bridge. |
 | upstream PR branches (#43 wind, #44 quick menu by Dorkington; #45 mods import; #46 LSFG import) | Upstreamable subsets of single features. Carried in `common` as cherry-picks with their authors. |
 

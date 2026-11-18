@@ -163,7 +163,7 @@ version_code = 10004
 key = "fork-release.p12"
 key_pass_file = "fork-release.pass"
 debuggable = false
-repository = "https://github.com/KuriGohan-Kamehameha/totk-android"
+repository = "https://github.com/P1R4N351/totk-android"
 release_tag = "v"
 release_asset = "TotK-Native-"
 
@@ -173,7 +173,7 @@ label = "TotK Native (dev)"
 version_name = "1.0.1-dev"
 key = "totk-dev.pem"
 debuggable = true
-repository = "https://github.com/KuriGohan-Kamehameha/totk-android"
+repository = "https://github.com/P1R4N351/totk-android"
 release_tag = "v"
 release_asset = "TotK-Native-"
 

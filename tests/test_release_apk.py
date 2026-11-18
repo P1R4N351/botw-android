@@ -30,7 +30,7 @@ def apk(path, entries, stored=()):
     return path
 
 
-REPOSITORY = 'https://github.com/KuriGohan-Kamehameha/totk-android'
+REPOSITORY = 'https://github.com/P1R4N351/totk-android'
 COMMIT = '85f12832ab12' + '0' * 28
 GOOD = {'AndroidManifest.xml': b'\x03\x00', 'classes.dex': b'dex\n035', 'resources.arsc': b'\x02\x00',
         'META-INF/MANIFEST.MF': b'Manifest-Version: 1.0', 'META-INF/CERT.SF': b'sf', 'META-INF/CERT.RSA': b'rsa',

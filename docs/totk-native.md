@@ -4,7 +4,7 @@
 
 > This is the Tears of the Kingdom app's guide, kept from [totk-android](https://github.com/AurelioB/totk-android) and
 > updated for this fork. The fork app installs as *TotK Native (fork)* (`io.github.kurigohankamehameha.totk`) beside or
-> instead of the official one; its releases are on [KuriGohan-Kamehameha/totk-android](https://github.com/KuriGohan-Kamehameha/totk-android/releases).
+> instead of the official one; its releases are on [P1R4N351/totk-android](https://github.com/P1R4N351/totk-android/releases).
 > Back to the [main README](../README.md).
 
 
