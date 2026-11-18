@@ -65,10 +65,11 @@ Vendored files are unmodified except:
 | File | Change | Why |
 |---|---|---|
 | `emu/src/core/mods/mod_assets.cpp` | Two `#if !DUO_PORT` ... `#endif // !DUO_PORT` pairs around `OpenPrivateRomFS`, `ModRuntime::RegisterAssetSources` and `ModRuntime::OpenGameRomFS`. No line inside them is changed. | Those three functions open the emulator's content (loader, NCA, PatchManager, system NAND). The port's versions, over its own RomFS reader, are in `../port_sources.cpp`. |
+| `companions/packages/BreathOfTheWild/dualscreen/manifest.json` | Ready page widget 87 (the *Area unavailable* label under the disc): its `need_bind` `!botw.ready.area.valid` becomes `local.never.area_unavailable`, a name nothing publishes, so the label never shows. One value in one widget; no widget is added, removed or moved (the TotK generator addresses BotW's widgets by index). | Owner's rule (2026-11-17): what both games' pages have in common behaves the same, and the TotK page shows no caption while the area is unknown. The area name itself (widgets 164, 165) is unchanged. Re-apply after an update: search for `Area unavailable`. |
 | `third_party/ankerl/unordered_dense.h` | Eden Duo's own patch `.patch/unordered-dense/0001-avoid-memset-when-clearing-an-empty-table.patch` applied. | To match what Eden Duo builds with. |
 
 To update: copy the same file set from the new commits, re-apply the first change (the markers are greppable:
-`DUO_PORT`), update the commit ids here and in `../NOTICE.txt`, and run the desktop host test for both titles
+`DUO_PORT`) and the BotW manifest's *Area unavailable* gate, update the commit ids here and in `../NOTICE.txt`, and run the desktop host test for both titles
 (`../test/README.md`). A change to the runtime's `companion_snapshot.c`, `companion.h` or `companion_state.h` goes to
 the companions' `totk_reader/` too, and the vendored copy is then updated with it (the byte-identity test fails until
 both agree).
