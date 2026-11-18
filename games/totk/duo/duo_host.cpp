@@ -11,12 +11,15 @@
 //     3. the tick loop. The game posts one wake per presented frame (duo_host_frame); the loop also wakes 16 ms
 //        after its last tick, so the page keeps its 60 Hz clock while the game renders 30 frames a second and
 //        keeps animating through a loading stall. Nothing of this runs on a game thread.
-//   One menu option reaches the page: TOTK_DUO_MAP_ROTATE (ApplyMapPreference), the minimap's turn.
+//   Two menu options reach the page (ApplyMenuPreferences): TOTK_DUO_MAP_ROTATE, the minimap's turn, and
+//   TOTK_DUO_LEFT_PANEL, what the left panel shows (quest details, or the powers with their On/Off switches).
 //   The page reaches the screen through AuxRouting, as in the emulator: the runtime publishes ARGB pixels, the
 //   "duo-present" thread copies each new frame into the second screen's Surface (DuoSurfaceView hands it over by
 //   JNI). No GPU is involved; the game's Vulkan device never sees the companion.
 //
-// Read-only: the shim refuses guest writes and reports no mailbox, so the module's action bridge stays unavailable.
+// Read-only: the shim refuses guest writes and reports no mailbox, so the module's action bridge stays unavailable. The
+// one write is Breath of the Wild's Champion powers switch, which port_module.cpp hands to the runtime's guarded write
+// (DuoPort ABI 4: compared, bounded, at the game's next frame), never through the shim.
 // The host never calls game code. Item actions are the runtime's (DuoPort ABI 3): port_module.cpp hands the Tears of
 // the Kingdom module a table that forwards to them, and the runtime runs them on the game's frame end.
 
@@ -332,35 +335,70 @@ bool WaitForPackage() {
     return false;
 }
 
-/// Shown under the Minimap row on the companion's settings page in the apps (ApplyMapPreference).
-constexpr std::string_view MapNoteText =
-    "A change here lasts until the game closes. To keep it, set Second screen map in the app's Graphics menu.";
-
-/// The menu's "Second screen map" (Graphics -> Screen, both games; settings.env TOTK_DUO_MAP_ROTATE=1, absent = North
-/// up): the package's "Minimap" settings row, flag map_rotate (0 north up, 1 turning with the view; both companion
-/// packages carry it), starts at the menu's value on every start. The flag is then neither restored from nor saved to the
+/// The app's own menu options that reach the companion page (Graphics -> Screen, both games; settings.env carries a
+/// line only when one is not at its default). Each is a settings row of both companion packages (runtime 17
+/// "settings"), whose flag starts at the menu's value on every start and is then neither restored from nor saved to the
 /// runtime's persisted-flags file: the choice lives in the app's menu, and a change made on the companion's own settings
-/// page (hold the minimap) lasts until the game ends. That page says so under the row (a note added to the runtime's
-/// generated "@settings" page), so a player who turns it there knows where to keep it. A package without the row is
-/// left as it is.
-void ApplyMapPreference(Core::Mods::Manifest& manifest) {
-    static const std::string Flag = "map_rotate";
-    if (!manifest.flag_defaults.contains(Flag)) {
+/// page lasts until the game ends. A package without the row is left as it is. One rule for both games.
+struct MenuPreference {
+    const char* flag;                   // the packages' settings flag (0 = the default)
+    const char* env;                    // the settings.env line the menu writes when not at the default
+    const char* set;                    // its value then; the flag is 1
+    const char* menu;                   // the menu row, named in the note
+    std::array<const char*, 2> said;    // the log's words for 0 and 1
+};
+constexpr std::array<MenuPreference, 2> MenuPreferences{{
+    // "Second screen map": the package's "Minimap" row (0 north up, 1 turning with the view)
+    {"map_rotate", "TOTK_DUO_MAP_ROTATE", "1", "Second screen map", {"north up", "turns with the view"}},
+    // "Left panel": the package's "Left panel" row (0 quest details, 1 the Sages / Champions with their On/Off switches)
+    {"left_mode", "TOTK_DUO_LEFT_PANEL", "powers", "Left panel", {"quest details", "powers with their switches"}},
+}};
+
+/// Shown under the last of those rows on the companion's settings page in the apps, naming the menu rows to use.
+std::string MenuNoteText(const std::vector<std::string>& menus) {
+    std::string named;
+    for (size_t i = 0; i < menus.size(); ++i) {
+        named += (i == 0 ? "" : i + 1 == menus.size() ? " and " : ", ") + menus[i];
+    }
+    return menus.size() == 1
+               ? "A change here lasts until the game closes. To keep it, set " + named + " in the app's Graphics menu."
+               : "Changes here last until the game closes. To keep them, set " + named + " in the app's Graphics menu.";
+}
+
+/// Applies MenuPreferences to the package, then says on its settings page (a note added to the runtime's generated
+/// "@settings" page, under the lowest row, so it covers no other row) that a change there lasts until the game closes
+/// and which menu rows keep it.
+void ApplyMenuPreferences(Core::Mods::Manifest& manifest) {
+    std::vector<std::string> menus;
+    for (const MenuPreference& pref : MenuPreferences) {
+        const std::string flag = pref.flag;
+        if (!manifest.flag_defaults.contains(flag)) {
+            continue;
+        }
+        const bool set = EnvIs(pref.env, pref.set);
+        manifest.flag_defaults.insert_or_assign(flag, set ? 1 : 0);
+        std::erase(manifest.persist_flags, flag);
+        Say("duo: {}: {} ({}={})", pref.menu, pref.said[set ? 1 : 0], pref.env, set ? pref.set : "unset");
+        menus.emplace_back(pref.menu);
+    }
+    if (menus.empty()) {
         return;
     }
-    const bool rotate = EnvIs("TOTK_DUO_MAP_ROTATE", "1");
-    manifest.flag_defaults.insert_or_assign(Flag, rotate ? 1 : 0);
-    std::erase(manifest.persist_flags, Flag);
-    Say("duo: minimap {} (TOTK_DUO_MAP_ROTATE={})", rotate ? "turns with the view" : "north up", rotate ? 1 : 0);
 
-    // The note under the row on the generated settings page (mod_settings.cpp: rows "@settings.row.<flag>", values
-    // "@settings.value.<flag>"), in the value colour, wrapped to the row's width.
+    // The note under the lowest row of the generated settings page (mod_settings.cpp: rows "@settings.row.<flag>",
+    // values "@settings.value.<flag>"), in the value colour, wrapped to the row's width.
     const auto page = std::ranges::find(manifest.pages, Core::Mods::SettingsPageId, &Core::Mods::Page::id);
     if (page == manifest.pages.end()) {
         return;
     }
     auto& widgets = page->widgets;
-    const auto row = std::ranges::find(widgets, "@settings.row." + Flag, &Core::Mods::Widget::id);
+    static constexpr std::string_view RowId = "@settings.row.";
+    auto row = widgets.end();
+    for (auto it = widgets.begin(); it != widgets.end(); ++it) {
+        if (it->id.starts_with(RowId) && (row == widgets.end() || it->rect[1] > row->rect[1])) {
+            row = it;
+        }
+    }
     if (row == widgets.end()) {
         return;
     }
@@ -368,16 +406,17 @@ void ApplyMapPreference(Core::Mods::Manifest& manifest) {
     const s32 inset = std::max(0, row->text_inset);
     const s32 scale = std::max(2, row->text_scale * 2 / 3);
     u32 color = row->color;
-    if (const auto value = std::ranges::find(widgets, "@settings.value." + Flag, &Core::Mods::Widget::id);
+    const std::string flag = row->id.substr(RowId.size());
+    if (const auto value = std::ranges::find(widgets, "@settings.value." + flag, &Core::Mods::Widget::id);
         value != widgets.end()) {
         color = value->color;
     }
     Core::Mods::Widget note;
     note.type = Core::Mods::WidgetType::Label;
-    note.id = "@settings.note." + Flag;
+    note.id = "@settings.note.menu";
     note.rect = {x + inset, y + h + scale * 4, 0, 0};
     note.align = 0;
-    note.text = std::string{MapNoteText};
+    note.text = MenuNoteText(menus);
     note.text_scale = scale;
     note.wrap_width = std::max(1, w - 2 * inset);
     note.max_lines = 3;
@@ -400,7 +439,7 @@ bool StartRuntime() {
         }
         Say("duo: package '{}' ({}), {} pages, canvas {}x{}", manifest->name, manifest->mod_dir_name,
             manifest->pages.size(), manifest->canvas_w, manifest->canvas_h);
-        ApplyMapPreference(*manifest);
+        ApplyMenuPreferences(*manifest);
         g_runtime.emplace(*g_system, std::move(*manifest));
         g_runtime->SetMainMemoryParameters(g_port.main_base, g_port.main_size);
         g_runtime->Initialize();

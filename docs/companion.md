@@ -8,7 +8,12 @@
 > minimap is north up in both games; *Graphics → Screen → Second screen map* turns it with the view instead (*Rotate
 > with camera*: Breath of the Wild follows the camera, Tears of the Kingdom Link's facing, since no camera direction is
 > read), settings.env `TOTK_DUO_MAP_ROTATE=1`. Holding the minimap opens the page's own settings, where the same choice
-> lasts until the game closes; a note under the row says so and points to the menu. The setup no longer
+> lasts until the game closes; a note under the row says so and points to the menu. *Graphics → Screen → Left panel*
+> chooses the left pager: *Quest details* (the default: the main quest, a side quest, read from the player's own files,
+> with the distance to where they lead, then the Sages or Champions, swiped) or *Powers* (only the Sages or Champions,
+> each with an On/Off switch: a sage is summoned or dismissed as the game's Key Items menu does, through this app's
+> runtime; a Champion power is turned off or on, which stays in that save until turned on again there, with *Turn all
+> on*), settings.env `TOTK_DUO_LEFT_PANEL=powers`; holding the left pager opens the same choice. The setup no longer
 > prepares *Second-screen art*. The rest of this page describes the earlier companion (`CompanionView`), which stays
 > in the source, unused, until it is either brought back or removed.
 

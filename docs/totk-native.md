@@ -325,6 +325,18 @@ the second screen opens the same choice for the current game only. Shown next to
 
 Options: North up, Rotate with camera · Default: **North up**.
 
+#### Left panel
+
+What the panel left of the second screen's minimap shows. Quest details: the main quest and a side quest, with the
+distance to where they lead, then the powers (the Sages in Tears of the Kingdom, the Champions in Breath of the Wild);
+swipe between them. Powers: only the powers, each with an On/Off switch. A sage's switch summons or dismisses the sage,
+as the game's Key Items menu does. A Champion's switch turns that power off or on, which the game itself never offers:
+a power you turn off stays off in that save until you turn it on again there (*Turn all on* turns every power back on).
+Holding the panel on the second screen opens the same choice for the current game only. Shown next to *Second screen
+map*.
+
+Options: Quest details, Powers · Default: **Quest details**.
+
 </details>
 
 <details>

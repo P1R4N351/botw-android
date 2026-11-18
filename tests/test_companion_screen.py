@@ -505,15 +505,16 @@ class DuoMapTurn(unittest.TestCase):
         for game, turn in (('botw', 'Rotate with camera'), ('totk', 'Rotate with Link')):
             with self.subTest(game=game):
                 m = self.manifest(game)
-                self.assertEqual(m['settings'], [{'flag': 'map_rotate', 'label': 'Minimap', 'type': 'toggle',
-                                                  'choices': ['North up', turn], 'default': 0}])
+                self.assertEqual(m['settings'][0], {'flag': 'map_rotate', 'label': 'Minimap', 'type': 'toggle',
+                                                    'choices': ['North up', turn], 'default': 0})
+                self.assertEqual([r['flag'] for r in m['settings']], ['map_rotate', 'left_mode'])   # + the left panel
                 self.assertNotIn('map_rotate', m.get('flags', {}))      # a "flags" value would win over the default
                 self.assertGreaterEqual(m['min_runtime'], 17)           # settings rows: runtime 17
                 self.assertEqual(m['actions']['open_settings']['page'], '@settings')
                 ready = next(p for p in m['pages'] if p['id'] == 'ready')['widgets']
                 holds = [w for w in ready if w.get('on_hold') == 'open_settings']
-                self.assertEqual(len(holds), 1)                          # holding the minimap opens it
-                self.assertEqual(holds[0]['rect'], [220, 64, 800, 800])
+                # holding the minimap opens it (and holding the left pager: its two swipe areas, the Left panel row)
+                self.assertEqual(sorted(w['rect'] for w in holds), [[16, 232, 184, 468]] * 2 + [[220, 64, 800, 800]])
 
     def test_the_turn_is_bound_through_the_module_values(self):
         for game in ('botw', 'totk'):
@@ -533,7 +534,8 @@ class DuoMapTurn(unittest.TestCase):
                 for page in self.manifest(game)['pages']:
                     if page['id'] != 'ready':
                         self.assertFalse([w for w in page['widgets'] if 'view_rotate_bind' in w], page['id'])
-        self.assertEqual(len(next(p for p in self.manifest('botw')['pages'] if p['id'] == 'ready')['widgets']), 990)
+        # 990 upstream widgets, then the Champion powers switches appended (test_companion_quests.LeftPanel)
+        self.assertEqual(len(next(p for p in self.manifest('botw')['pages'] if p['id'] == 'ready')['widgets']), 1034)
 
     def test_the_modules_turn_only_on_the_flag(self):
         modules = self.VENDOR / 'native/modules'
@@ -551,35 +553,42 @@ class DuoMapTurn(unittest.TestCase):
 
     def test_the_host_applies_the_menu_at_start(self):
         host = (ROOT / 'games/totk/duo/duo_host.cpp').read_text()
-        self.assertIn('const bool rotate = EnvIs("TOTK_DUO_MAP_ROTATE", "1");', host)
-        self.assertIn('manifest.flag_defaults.insert_or_assign(Flag, rotate ? 1 : 0);', host)
-        self.assertIn('std::erase(manifest.persist_flags, Flag);', host)   # the menu wins over a persisted value
+        # one table of the menu's options (generalised from the minimap's): flag, settings.env line, its value
+        self.assertIn('{"map_rotate", "TOTK_DUO_MAP_ROTATE", "1", "Second screen map",', host)
+        self.assertIn('{"left_mode", "TOTK_DUO_LEFT_PANEL", "powers", "Left panel",', host)
+        self.assertIn('const bool set = EnvIs(pref.env, pref.set);', host)
+        self.assertIn('manifest.flag_defaults.insert_or_assign(flag, set ? 1 : 0);', host)
+        self.assertIn('std::erase(manifest.persist_flags, flag);', host)   # the menu wins over a persisted value
         start = host[host.index('bool StartRuntime() {'):]
-        self.assertLess(start.index('ApplyMapPreference(*manifest);'), start.index('g_runtime.emplace('))
-        entry = host[host.index('void ApplyMapPreference('):host.index('bool StartRuntime() {')]
+        self.assertLess(start.index('ApplyMenuPreferences(*manifest);'), start.index('g_runtime.emplace('))
+        self.assertNotIn('ApplyMapPreference', host)
+        entry = host[host.index('void ApplyMenuPreferences('):host.index('bool StartRuntime() {')]
         self.assertNotIn('title_id', entry)   # one rule for both games
 
     def test_the_settings_page_says_a_change_there_is_for_this_game(self):
         # In the apps the menu decides map_rotate at every start, so the companion's own settings row (hold the minimap)
         # only lasts until the game closes. The host adds a note under that row saying so and naming the menu option.
         host = (ROOT / 'games/totk/duo/duo_host.cpp').read_text()
-        entry = host[host.index('void ApplyMapPreference('):host.index('bool StartRuntime() {')]
-        note = re.search(r'MapNoteText =\s*"([^"]+)";', host).group(1)
-        self.assertIn('until the game closes', note)
+        entry = host[host.index('void ApplyMenuPreferences('):host.index('bool StartRuntime() {')]
+        text = host[host.index('std::string MenuNoteText('):host.index('void ApplyMenuPreferences(')]
+        self.assertIn('until the game closes', text)
+        self.assertIn("in the app's Graphics menu.", text)
         menu = (ROOT / 'games/totk/android/java/com/aure/totk/setup/Strings.java').read_text()
         self.assertIn('case "duo_map": return "Second screen map";', menu)
-        self.assertIn('Second screen map', note)
-        self.assertIn("Graphics", note)
-        self.assertTrue(note.isascii())
+        self.assertIn('case "duo_left": return "Left panel";', menu)
+        self.assertTrue(text.isascii())
+        # one note under the lowest row, naming every menu row the host applied (two rows: no note covers a row)
+        self.assertIn('it->rect[1] > row->rect[1]', entry)
+        self.assertIn('note.text = MenuNoteText(menus);', entry)
         # The ids the runtime gives the generated row and value (mod_settings.cpp) are the ones the host looks for.
         settings = (ROOT / 'games/totk/duo/vendor/emu/src/core/mods/mod_settings.cpp').read_text()
         self.assertIn('row.id = std::format("@settings.row.{}", def.flag);', settings)
         self.assertIn('value.id = std::format("@settings.value.{}", def.flag);', settings)
-        self.assertIn('"@settings.row." + Flag', entry)
-        self.assertIn('"@settings.value." + Flag', entry)
+        self.assertIn('"@settings.row."', entry)
+        self.assertIn('"@settings.value." + flag', entry)
         self.assertIn('Core::Mods::SettingsPageId', entry)
         self.assertIn('note.wrap_width', entry)
-        self.assertLess(entry.index('std::erase(manifest.persist_flags, Flag);'), entry.index('widgets.push_back('))
+        self.assertLess(entry.index('std::erase(manifest.persist_flags, flag);'), entry.index('widgets.push_back('))
         readme = (ROOT / 'games/totk/duo/vendor/companions/packages/TearsOfTheKingdom/README.md').read_text()
         self.assertIn('unless the host decides it', readme)
         self.assertIn('until the game closes', readme)
@@ -588,12 +597,18 @@ class DuoMapTurn(unittest.TestCase):
         for doc in ('docs/developer-settings.md', 'docs/companion.md', 'games/totk/android/APP.md',
                     'games/totk/android/BOTW.md'):
             self.assertIn('Second screen map', (ROOT / doc).read_text(), doc)
+            self.assertIn('Left panel', (ROOT / doc).read_text(), doc)
         self.assertIn('TOTK_DUO_MAP_ROTATE=1', (ROOT / 'docs/developer-settings.md').read_text())
+        self.assertIn('TOTK_DUO_LEFT_PANEL=powers', (ROOT / 'docs/developer-settings.md').read_text())
         local = (ROOT / 'games/totk/duo/vendor/README.md').read_text()
         local = local[local.index('## Local changes'):]
-        for name in ('botw_map_view.h', '01007EF00011E000.cpp', 'BreathOfTheWild/dualscreen/manifest.json'):
+        for name in ('botw_map_view.h', '01007EF00011E000.cpp', 'BreathOfTheWild/dualscreen/manifest.json',
+                     'botw_champion_toggle.h', 'botw_ready_panes.h', '01007EF00011E000_actions.h'):
             self.assertIn(name, local)
-        self.assertIn('map_rotate', (ROOT / 'games/totk/duo/NOTICE.txt').read_text())
+        notice = (ROOT / 'games/totk/duo/NOTICE.txt').read_text()
+        self.assertIn('map_rotate', notice)
+        self.assertIn('champion_toggle', notice)
+        self.assertIn('champion_toggle', local)
 
 
 if __name__ == '__main__':

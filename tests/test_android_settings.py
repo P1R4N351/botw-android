@@ -18,7 +18,7 @@ ALLOWED = {'TOTK_FPS60', 'TOTK_GPU_TIME', 'TOTK_FRAMEGEN', 'TOTK_FRAMEGEN_ENGINE
            'DM_PRESENT_INTERVAL', 'TOTK_PRESENT_SLOTS', 'TOTK_VK_PRESENT', 'TOTK_ACQUIRE_SLACK', 'TOTK_ACQUIRE_CLOCK',
            'TOTK_PACE', 'TOTK_ASYNC_REPLAY', 'TOTK_RENDER_RES', 'TOTK_POST_SCALE', 'TOTK_POST_SHARPNESS',
            'TOTK_POST_SGSR_SHARPNESS', 'TOTK_FXAA', 'TOTK_POST_AA', 'TOTK_SHADOW_RES', 'TOTK_OPERATION_MODE',
-           'TOTK_NATIVE_UI', 'TOTK_OVERLAY', 'TOTK_OVERLAY_POS', 'TOTK_COMPANION', 'TOTK_DUO_MAP_ROTATE', 'TOTK_FACE_BUTTONS',
+           'TOTK_NATIVE_UI', 'TOTK_OVERLAY', 'TOTK_OVERLAY_POS', 'TOTK_COMPANION', 'TOTK_DUO_MAP_ROTATE', 'TOTK_DUO_LEFT_PANEL', 'TOTK_FACE_BUTTONS',
            'TOTK_AUDIO_PREFILL_MS', 'TOTK_LOCALE', 'TOTK_LANG', 'TOTK_DATA_DIR', 'TOTK_RUMBLE', 'TOTK_RUMBLE_GAIN', 'TOTK_GYRO',
            'TOTK_AUTOLOAD', 'TOTK_VK_SPLIT_PASS_DRAWS', 'TOTK_ADPF_GPU', 'TOTK_FPS60_HYSTERESIS',
            'TOTK_UNCAPPED', 'TOTK_UNCAPPED_HZ', 'TOTK_UNCAPPED_INTERVAL', 'TOTK_FRAME_RATE_HINT', 'TOTK_FRAME_RATE_HINT_HZ'}
@@ -380,9 +380,38 @@ class SettingsTests(unittest.TestCase):
         # next to Second screen on the Screen tab, only where the Eden Duo page is the second screen
         rows = setup[setup.index('keys.add("second_screen");'):]
         rows = rows[:rows.index('for (String key : keys) settingRow(list, key);')]
-        self.assertIn('if (!ArtPolicy.used(GameBuild.COMPANION)) keys.add("duo_map");', rows)
+        self.assertIn('if (!ArtPolicy.used(GameBuild.COMPANION)) { keys.add("duo_map"); keys.add("duo_left"); }', rows)
         self.assertIn('case "duo_map": return "Second screen map";', strings)
         self.assertIn('case "duo_map": return value.equals("rotate") ? "Rotate with camera" : "North up";', strings)
+
+    def test_second_screen_left_panel_is_quest_details_unless_powers(self):
+        # Graphics -> Screen -> Left panel (both games): Quest details writes nothing (the default file keeps its bytes),
+        # Powers one line after the map's, which duo_host.cpp applies to the packages' left_mode flag at start.
+        self.assertFalse(any(l.startswith('TOTK_DUO_LEFT_PANEL') for l in self.env()))
+        self.assertFalse(any(l.startswith('TOTK_DUO_LEFT_PANEL') for l in self.env(duo_left='quests')))
+        powers = self.env(duo_left='powers')
+        self.assertEqual(powers[powers.index('TOTK_COMPANION=1') + 1], 'TOTK_DUO_LEFT_PANEL=powers')
+        both = self.env(duo_left='powers', duo_map='rotate')
+        self.assertEqual(both[both.index('TOTK_COMPANION=1') + 1:both.index('TOTK_COMPANION=1') + 3],
+                         ['TOTK_DUO_MAP_ROTATE=1', 'TOTK_DUO_LEFT_PANEL=powers'])
+        self.assertIn('TOTK_DUO_LEFT_PANEL=powers', self.env(duo_left='powers', second_screen='off'))
+        self.assertEqual(self.values(self.run_probe('stored duo_left=champions')[0])['duo_left'], 'quests')
+        wrap = self.values(self.run_probe('step duo_left 1 duo_left=powers')[0])
+        self.assertEqual(wrap['duo_left'], 'quests')
+        self.assertEqual(self.run_probe('preset duo_left=powers'), self.run_probe('preset'))   # not part of a preset
+
+    def test_second_screen_left_panel_row(self):
+        java = TOTK / 'android/java/com/aure/totk/setup'
+        settings, strings, setup, diagram = ((java / n).read_text() for n in
+                                             ('Settings.java', 'Strings.java', 'SetupActivity.java', 'Diagram.java'))
+        self.assertIn('new Option("duo_left", SCREEN, "quests", "quests", "powers")', settings)
+        # beside Second screen map, only where the Eden Duo page is the second screen
+        self.assertIn('if (!ArtPolicy.used(GameBuild.COMPANION)) { keys.add("duo_map"); keys.add("duo_left"); }', setup)
+        self.assertIn('case "duo_map": case "duo_left":', setup)   # applies when the game starts; needs Second screen
+        self.assertIn('case "duo_left": return "Left panel";', strings)
+        self.assertIn('case "duo_left": return value.equals("powers") ? "Powers" : "Quest details";', strings)
+        self.assertIn('until you turn it on again there', strings)   # BotW: an Off power stays off in that save
+        self.assertIn('case "duo_left": leftPanel(c, w, h); break;', diagram)
 
     def test_sharpness_follows_the_selected_upscaler_only(self):
         fsr = self.env(upscaler='fsr')

@@ -1499,9 +1499,11 @@ pending, done, refused or failed. The library calls no game code itself. Touch i
 apps (`TOTK_DUO_TOUCH=0` in `totk.env` turns it off; a release build's private game data has no editable `totk.env`, so
 the default is what players get). The page's minimap is north up in both apps; the menu's *Graphics → Screen →
 Second screen map* (*North up* / *Rotate with camera*, settings.env `TOTK_DUO_MAP_ROTATE=1`) sets the packages' flag
-`map_rotate` at every start (`duo_host.cpp` `ApplyMapPreference`; the runtime's persisted value of that flag is not
+`map_rotate` at every start (`duo_host.cpp` `ApplyMenuPreferences`; the runtime's persisted value of that flag is not
 used, and a change on the page's own settings page, opened by holding the minimap, lasts until the game ends; the host
-adds a note under that row saying so and naming the menu option). Breath of
+adds a note under the lowest of those rows saying so and naming the menu options). The menu's *Left panel* (*Quest
+details* / *Powers*, settings.env `TOTK_DUO_LEFT_PANEL=powers`) sets the packages' flag `left_mode` the same way
+(holding the left pager opens the page's own row): see *Second-screen quests* and *Sage powers* below. Breath of
 the Wild's module turns the map with the camera whatever the game's own minimap option is (a local change,
 `duo/vendor/README.md`); Tears of the Kingdom's turns it with Link's facing, as no camera direction is read.
 `TOTK_DUO=0` turns it off, `TOTK_DUO=module` logs the module's values
@@ -1702,6 +1704,66 @@ and the first game call at frame 8858, none before. After settling every tap ran
 back done in ~8 frames). **Dialogue:** talking to Purah sets the event context (`event`), the companion shows "In a
 cutscene" with Equip disabled for the whole conversation and the taps called nothing; the host test covers a request
 queued just before an event or a reload (refused `event` / `loading`).
+
+### Second-screen quests
+
+The Eden Duo page's left pager in *Quest details* (owner, 2026-11-18): Breath of the Wild's Main quest / Side quest /
+Champions pages with Tears of the Kingdom's quests and Sages. Read-only, the same in this app and in Eden Duo
+(`duo/vendor/companions/native/modules/totk_reader/totk_quests.c`, MIT). Nothing about the quests is shipped:
+
+- **Catalogue**: `RSDB/Challenge.Product.<v>.rstbl.byml.zs` of the player's romfs (1.4.3: v 143, 69181 B zstd,
+  563076 B little-endian BYML v7, 285 rows), parsed with this app's own BYML reader (the asset stager's `cg_byml`,
+  `android/setup/companion/cg_formats.c`, copied as `totk_byml.c`). Per row: the name from `__RowId`
+  (`Work/Challenge/<Name>.game__challenge__Challenge.gyml`); `Category` Main (23 rows) / Sub (31, the crystal quests,
+  the game's Shrine Quests tab) / ImportantMini (66, Side Adventures) / none (165, Side Quests); `SortIndex` (missing on
+  31 rows, none of them Main: sorted last); `IsListAdventureLog` (false on 32 minigame rows); `Steps[]` (step 0 is
+  always `Ready`) with `IsNotChangeAdventureLog` and `DestinationPoint[]` (`DestinationPos {Pos}` or `DestinationActor
+  {AlternativePos}`, with an optional `BlackOutFlag`).
+- **State** (GameData, `totk_gamedata.c`): the enum `Step_<Name>` holds mmh3 of the current step's name, of `NotReady`
+  or of `Complete` (checked for 285 of 285 rows against `GameDataList.Product.140`; main has `Step_%s` at file offset
+  0x2CD217B); the UInt `SelectChallengeHash` (0x2029d3d8) holds mmh3(<Name>) of the tracked quest, 0 for none (written
+  by ChallengeMgr select main+0x1a441ac / toggle main+0x1a4421c through main+0xcbedb8). The UInt table is at
+  GameDataMgr+0x788, entries of 0x28 bytes, value at +0x1c (getUInt main+0xb12818). Every quest is read on the
+  module's full samples (2 Hz, about 850 reads).
+- **Pages**: *Main quest* shows the tracked quest when it is a main quest and open (listed, past `Ready`, not
+  `Complete`: a save can track a Complete quest, the owner's slot 0 does), else the main quest whose step changed last
+  in this session, else the open main quest with the lowest `SortIndex`; *Side quest* the tracked quest when it is not
+  a main quest, else an open Side Adventure, then an open Side Quest, by the same rule; *No active quest* otherwise. The
+  name is the `Name` label of `ChallengeMsg/Info_<Name>.msbt` (the player's message archive, tags dropped by the
+  module's `ParseMsbt`); the distance is to the nearest destination of the current step on the map plane, skipping a
+  destination whose `BlackOutFlag` Bool is set (a BoolExp is not looked up: treated as not set), `%.1f km` from 1000 m.
+- **To verify on the device before release** (read-only): the pages against the game's Adventure Log (open quests,
+  the tracked quest, a Complete tracked quest after a load, a step without its own text); `BlackOutFlag` set = hidden;
+  the quest icon `Nt_PauseIconChL_01^s` exists in the Common layout.
+
+### Sage powers
+
+The left pager's *Powers* in this app (Tears of the Kingdom): each joined sage's row has an On/Off switch. On = the sage
+is with Link (`PlayerStatus.Companion.<S>.IsSummon`). The Eden Duo module asks this runtime through the item-action
+route (`duo/duo_port.h` ABI 3, key 9 = `COMPANION_SAGES`, the slot is the sage: 0 Wind, 1 Fire, 2 Water, 3 Electric,
+4 Soul); `companion_actions.c` runs it on the game's frame end like an item action, one at a time, re-checked there.
+Static analysis (study and verifier of 2026-11-17): the pause menu's Key Items (`PauseMenu::doAction` main+0x2173d18,
+cases 15-24) finds CompanionMgr as player component 0x12 through its typed query (vtable[0] main+0xc6d214, type id
+main+0xc1eb14) and calls, to summon, prep main+0x1fa1e20(mgr, i), summon main+0xc6c700(mgr, i, 1), setIsSummon
+main+0x1fa1c60(mgr, i, 1); to dismiss, dismiss main+0x1fa1658(mgr, i, 1), setIsSummon(mgr, i, 0). The runtime calls
+exactly that (the menu's screen icon and close-time Link reaction are cosmetic and left out); each function is guarded
+by the SHA-256 of its first 64 bytes (hashes of the Thor's rewritten main, whose bytes at the 24 item-action entries
+match the original's; none of the new prologues has a rewritten site). Refusals, in the game's order: the game state
+(`menu`, `event`, `loading`, ...), `notNow` (no CompanionMgr), `notJoined` (`IsGet` false), `sagesSuppressed` (GameData
+bool 0x1d29c6a7: the manager dismisses all five while set), `sageUnavailableHere` (CompanionMgr+0x158 = 0: the menu's own
+grey-out), `stateChanged` (IsSummon is no longer what the page showed). The cooldown and `JoiningCondition` are not
+checked, as the menu does not. Read-back: summon is done when the game's own getter (main+0x1fa1d38) reads 1 after
+GameData commits it; dismiss when it reads 0 and the avatar has left (link handle mgr+0x40+i*0x18+0x10 = -1, mask bit
+i of mgr+0x160 clear); when the game only changed the flag (dismiss returns early for some avatars) the request ends
+`done` with reason `flagOnly` ("stays until the next load"). **Not offered yet** (`verified_sages = 0`, every switch
+shows *Not available from the companion yet*) until the Thor shows, for each sage: the avatar appears and leaves, Key
+Items shows the same state, it survives save and reload, and the frame-end thread id matches the item actions'. In Eden
+Duo the switches show the state read-only (*Needs the TotK Native app*); no plain-write variant is offered.
+
+Breath of the Wild's *Powers* (BotW Native, `BOTW.md`) turns a Champion power off or on with one byte of its key item,
+through the runtime's guarded write (DuoPort ABI 4, `runtime/duo_port.c`: at most 4 stores of 1-8 bytes, each inside
+the game's heap, every expected value compared, all or none, on the game's thread at its next presented frame; the
+caller waits at most a quarter second). Tears of the Kingdom's build offers no such write.
 
 ### Fixture preview (no game/native runtime)
 

@@ -189,6 +189,8 @@ class CompanionStateTests(unittest.TestCase):
         # MIT frontend); the host turns it into the packages' flag (duo_host.cpp ApplyMapPreference).
         self.assertIn('"TOTK_DUO_MAP_ROTATE"', (TOTK / 'runtime/frontend_android.c').read_text())
         self.assertIn('TOTK_DUO_MAP_ROTATE=1', (TOTK / 'android/java/com/aure/totk/setup/Settings.java').read_text())
+        self.assertIn('"TOTK_DUO_LEFT_PANEL"', (TOTK / 'runtime/frontend_android.c').read_text())
+        self.assertIn('TOTK_DUO_LEFT_PANEL=powers', (TOTK / 'android/java/com/aure/totk/setup/Settings.java').read_text())
         self.assertIn('getenv', (TOTK / 'duo/duo_host.cpp').read_text())
         self.assertIn('dlopen', port)
         # Tears of the Kingdom: the host's fresh sample first, its own reader until there is one, without the host, or
@@ -225,9 +227,11 @@ class CompanionStateTests(unittest.TestCase):
         # test_companion_gate.CompanionGate.test_duo_route (Linux: duo_port.c and companion_jni.c through the table)
         # and by the desktop host test's actions scenes (duo/test/totk_host_test.cpp: the module's side).
         port_h = (TOTK / 'duo/duo_port.h').read_text()
-        self.assertIn('#define DUO_PORT_ABI 3u', port_h)
+        # ABI 4 appends the guarded write (Breath of the Wild's Champion powers switches; test_companion_powers)
+        self.assertIn('#define DUO_PORT_ABI 4u', port_h)
         fields = re.findall(r'\(\*(\w+)\)\(', port_h.split('typedef struct DuoPort {', 1)[1].split('} DuoPort;', 1)[0])
-        self.assertEqual(fields[-6:], ['state', 'item_actions', 'action_state', 'pouch_gen', 'request', 'result'])
+        self.assertEqual(fields[-7:], ['state', 'item_actions', 'action_state', 'pouch_gen', 'request', 'result',
+                                       'guarded_write'])
         port_c = (TOTK / 'runtime/duo_port.c').read_text()
         self.assertIn('#define DUO_ITEM_ACTIONS 0', port_c.split('#else', 1)[0])            # Breath of the Wild: none
         self.assertIn('#define DUO_ITEM_ACTIONS 1', port_c.split('#ifdef GAME_BOTW', 1)[1].split('#endif', 1)[0])

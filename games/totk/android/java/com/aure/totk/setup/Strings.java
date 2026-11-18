@@ -149,6 +149,7 @@ final class Strings {
             case "overlay_pos": return "Overlay position";
             case "second_screen": return "Second screen";
             case "duo_map": return "Second screen map";
+            case "duo_left": return "Left panel";
             case "buttons": return "Button layout";
             case "audio_latency": return "Audio latency";
             case "game_language": return "Game language";
@@ -174,6 +175,7 @@ final class Strings {
             case "overlay_pos": return "Corner of the screen";
             case "second_screen": return "Map, inventory and shortcuts on the lower display";
             case "duo_map": return "North up, or turning with the camera";
+            case "duo_left": return "Quest details, or the powers with On/Off switches";
             case "buttons": return "Which face button is the Switch's A";
             case "audio_latency": return "Low · Balanced · Safe";
             case "game_language": return "Text and voices in the game";
@@ -223,6 +225,14 @@ final class Strings {
                     + "game's own rotating minimap. In Tears of the Kingdom it turns with Link's facing instead (the "
                     + "camera's direction is not read yet), which matches while he runs. Holding the minimap on the "
                     + "second screen changes it for the current game only.";
+            case "duo_left": return "What the panel left of the second screen's minimap shows. Quest details: the main "
+                    + "quest and a side quest with the distance to where they lead, then the powers (the Sages in Tears "
+                    + "of the Kingdom, the Champions in Breath of the Wild), swiping between them. Powers: only the "
+                    + "powers, each with an On/Off switch. In Tears of the Kingdom a switch summons or dismisses the "
+                    + "sage, as the game's Key Items menu does. In Breath of the Wild it turns that Champion's power "
+                    + "off or on, which the game itself never offers: a power you turn off stays off in that save "
+                    + "until you turn it on again there, so use Turn all on before playing the save elsewhere. Holding "
+                    + "the panel on the second screen changes this for the current game only.";
             case "buttons": return "Nintendo: every button does what its label says, so A is A. Xbox: buttons act by position like on a "
                     + "Switch, so the right-hand button is A even though it is labelled B. Choose Xbox for gamepads with Xbox labels.";
             case "audio_latency": return "How much sound is queued before it plays. Low reacts fastest; Safe avoids crackling on busy "
@@ -249,6 +259,7 @@ final class Strings {
                 switch (value) { case "tl": return "Top left"; case "tr": return "Top right"; case "bl": return "Bottom left"; default: return "Bottom right"; }
             case "buttons": return value.equals("xbox") ? "Xbox" : "Nintendo";
             case "duo_map": return value.equals("rotate") ? "Rotate with camera" : "North up";
+            case "duo_left": return value.equals("powers") ? "Powers" : "Quest details";
             case "game_language": return languageName(value);
             case "rumble": return value.equals("0") ? "Off" : value + " %";
             default: return value.isEmpty() ? value : Character.toUpperCase(value.charAt(0)) + value.substring(1);
@@ -295,6 +306,7 @@ final class Strings {
     static final String DIAG_HUD_TEXT = "Sample caption 123", DIAG_NATIVE = "panel resolution", DIAG_ENLARGED = "enlarged";
     static final String DIAG_OFF = "off", DIAG_NO_SECOND = "No second display on this device right now";
     static final String DIAG_NORTH = "N";
+    static final String DIAG_MAIN_QUEST = "Main quest", DIAG_POWERS = "Powers", DIAG_ON = "On", DIAG_OFF_SWITCH = "Off";
     static final String DIAG_ACTS_AS_A_LABEL = "A is A", DIAG_ACTS_AS_A_POS = "acts as A";
     static String waiting(int n) { return n == 1 ? "1 picture may wait" : n + " pictures may wait"; }
     static String buffer(int ms) { return ms + " ms queued"; }

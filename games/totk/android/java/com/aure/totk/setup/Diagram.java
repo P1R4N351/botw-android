@@ -67,6 +67,7 @@ final class Diagram extends View {
             case "overlay": case "overlay_pos": handheld(c, w, h); break;
             case "second_screen": dual(c, w, h); break;
             case "duo_map": minimap(c, w, h); break;
+            case "duo_left": leftPanel(c, w, h); break;
             case "buttons": buttons(c, w, h); break;
             case "audio_latency": audio(c, w, h); break;
             case "game_language": language(c, w, h); break;
@@ -425,6 +426,44 @@ final class Diagram extends View {
             c.drawCircle(bs.left + bs.width() * .7f, bs.top + bs.height() * .7f, s(4), paint);
         } else label(c, Strings.DIAG_OFF, bs.centerX(), bs.centerY() + s(7), 18, Theme.TEXT3, Paint.Align.CENTER);
         if (!secondScreen) label(c, Strings.DIAG_NO_SECOND, w / 2, h - s(4), 16, Theme.AMBER, Paint.Align.CENTER);
+    }
+    /** Left panel: the second screen's left pane beside the minimap's rim. Quest details: a page title, a quest name's
+     * lines and the distance, with the pager's three dots. Powers: four power rows, each with its On/Off switch. */
+    private void leftPanel(Canvas c, float w, float h) {
+        boolean powers = value("duo_left").equals("powers");
+        float pw = Math.min(w * .32f, h * .62f), ph = h * .86f, x0 = w / 2 - pw * .9f, y0 = (h - ph) / 2;
+        RectF pane = new RectF(x0, y0, x0 + pw, y0 + ph);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.tint(0xff0d1412)); c.drawRoundRect(pane, s(10), s(10), paint);
+        frameBorder(c, pane, s(10), Theme.tint(0xff34433b), s(2), false);
+        paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s(2.5f)); paint.setColor(Theme.SEL);
+        float r = ph * .62f; c.drawCircle(pane.right + r * .9f, h / 2, r, paint);   // the minimap's rim beside it
+        if (!powers) {
+            label(c, Strings.DIAG_MAIN_QUEST, pane.centerX(), pane.top + s(26), 16, Theme.TEXT2, Paint.Align.CENTER);
+            paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.alpha(Theme.TEXT, .7f));
+            for (int i = 0; i < 3; i++) {
+                float lw = pw * (i == 2 ? .45f : .7f);
+                c.drawRoundRect(new RectF(pane.centerX() - lw / 2, pane.top + s(52 + 22 * i), pane.centerX() + lw / 2, pane.top + s(60 + 22 * i)), s(4), s(4), paint);
+            }
+            label(c, "1.2 km", pane.centerX(), pane.bottom - s(14), 16, Theme.TEXT, Paint.Align.CENTER);
+            for (int i = 0; i < 3; i++) {
+                paint.setColor(i == 0 ? Theme.TEXT : Theme.alpha(Theme.TEXT, .3f));
+                c.drawCircle(pane.right + s(8), pane.top + s(14 + 14 * i), s(3), paint);
+            }
+        } else {
+            label(c, Strings.DIAG_POWERS, pane.centerX(), pane.top + s(26), 16, Theme.TEXT2, Paint.Align.CENTER);
+            float rowH = (ph - s(44)) / 4;
+            for (int i = 0; i < 4; i++) {
+                float cy = pane.top + s(40) + rowH * (i + .5f);
+                boolean on = i != 2;
+                paint.setStyle(Paint.Style.FILL); paint.setColor(Theme.alpha(Theme.AMBER, on ? .9f : .35f));
+                c.drawCircle(pane.left + pw * .25f, cy, Math.min(rowH * .3f, s(14)), paint);
+                RectF pill = new RectF(pane.left + pw * .5f, cy - s(10), pane.right - s(10), cy + s(10));
+                paint.setColor(on ? Theme.SEL : Theme.tint(0xff1b2c26)); c.drawRoundRect(pill, s(10), s(10), paint);
+                label(c, on ? Strings.DIAG_ON : Strings.DIAG_OFF_SWITCH, pill.centerX(), cy + s(5), 14, on ? Theme.tint(0xff0d1412) : Theme.TEXT2, Paint.Align.CENTER);
+            }
+        }
+        if (!value("second_screen").equals("on")) label(c, Strings.DIAG_OFF, w / 2, h - s(4), 18, Theme.TEXT3, Paint.Align.CENTER);
+        else if (!secondScreen) label(c, Strings.DIAG_NO_SECOND, w / 2, h - s(4), 16, Theme.AMBER, Paint.Align.CENTER);
     }
     /** Second screen map: the round minimap with its N badge on the rim and the player's arrow, looking 40 degrees east
      * of north. North up: N at the top, the arrow turned. Rotate with camera: the map and its N turned so the view is up. */

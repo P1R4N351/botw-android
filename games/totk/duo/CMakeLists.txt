@@ -56,10 +56,12 @@ set(ZSTD ${CMAKE_CURRENT_SOURCE_DIR}/vendor/third_party/zstd)
 set(DUO_MODULE_INCLUDES)
 set(DUO_MODULE_FONT 0)   # 1: the module exports eden_dsmod_get_font_extensions (port_module.cpp negotiates it)
 set(DUO_MODULE_ACTIONS 0)   # 1: the module takes the runtime's item actions (totk_native_actions.h; port_module.cpp)
+set(DUO_MODULE_WRITES 0)    # 1: the module exports eden_dsmod_get_write_extensions, given the port's guarded write
 if (DUO_TITLE STREQUAL "01007EF00011E000")
     # Breath of the Wild 1.6.0: one translation unit (its botw_*.h headers).
     set(DUO_MODULE_MAIN native/modules/01007EF00011E000.cpp)
     set(DUO_MODULE_EXTRA)
+    set(DUO_MODULE_WRITES 1)   # its Champion powers switches (botw_champion_toggle.h, a local change)
 elseif (DUO_TITLE STREQUAL "0100F2C0115B6000")
     # Tears of the Kingdom 1.4.3: game state from TotK Native's reader (totk_reader/, MIT; the runtime's
     # companion_snapshot.c byte for byte, tests/test_companion_state.py), art and the Rodin font decoded from the
@@ -77,7 +79,7 @@ elseif (DUO_TITLE STREQUAL "0100F2C0115B6000")
     set(DUO_MODULE_EXTRA
         ${MODULES}/totk_layer.cpp ${MODULES}/totk_romfs.cpp ${MODULES}/wonder_assets.cpp ${MODULES}/wonder_font.cpp
         ${MODULES}/totk_reader/companion_snapshot.c ${MODULES}/totk_reader/totk_reader_ro.c
-        ${MODULES}/totk_reader/totk_gamedata.c
+        ${MODULES}/totk_reader/totk_gamedata.c ${MODULES}/totk_reader/totk_byml.c ${MODULES}/totk_reader/totk_quests.c
         ${ZSTD_SOURCES})
     set(DUO_MODULE_INCLUDES ${ZSTD})
     set(DUO_MODULE_FONT 1)
@@ -105,7 +107,7 @@ target_include_directories(duo_host PRIVATE
     ${MODULES}
     ${DUO_MODULE_INCLUDES})
 target_compile_definitions(duo_host PRIVATE EDEN_DSMOD_BUILD_DEV_TOOLS=0 DUO_PORT=1 DUO_MODULE_FONT=${DUO_MODULE_FONT}
-    DUO_MODULE_ACTIONS=${DUO_MODULE_ACTIONS})
+    DUO_MODULE_ACTIONS=${DUO_MODULE_ACTIONS} DUO_MODULE_WRITES=${DUO_MODULE_WRITES})
 # -fexperimental-library: std::jthread and std::stop_token in the NDK's libc++, as Eden Duo's own build does.
 target_compile_options(duo_host PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fexperimental-library> -Wno-deprecated-declarations
     ${DUO_EXTRA_FLAGS})

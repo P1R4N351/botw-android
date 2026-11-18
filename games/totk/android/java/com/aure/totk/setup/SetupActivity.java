@@ -1273,7 +1273,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
                 if (SettingsStore.secondaryDisplay(this)) {
                     keys.add("second_screen");
                     // The Eden Duo page's minimap (both games); CompanionView's map has no turn
-                    if (!ArtPolicy.used(GameBuild.COMPANION)) keys.add("duo_map");
+                    if (!ArtPolicy.used(GameBuild.COMPANION)) { keys.add("duo_map"); keys.add("duo_left"); }
                 }
         }
         for (String key : keys) settingRow(list, key);
@@ -1479,7 +1479,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
                     fact(Strings.COMPANION_ROW, art.done("companion") ? Strings.READY : art.artOutdated() ? Strings.OUT_OF_DATE : Strings.NOT_PREPARED);
                     break;
                 }
-                case "duo_map":
+                case "duo_map": case "duo_left":
                     fact(Strings.APPLIES, Strings.WHEN_STARTS);
                     if (!settings.get("second_screen").equals("on")) constraint = Strings.NEEDS_SECOND_SCREEN;
                     break;

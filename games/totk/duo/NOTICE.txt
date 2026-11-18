@@ -11,7 +11,7 @@ assets/duo/, that game's companion package. They come from the Eden Duo project:
 
   Eden Duo Companions (the title modules and their packages)
       https://github.com/P1R4N351/eden-duo-companions  branch totk-companion
-                                                      commit 8d6a90e8a3ba0751bb1cebe70ca349256c1e7c84
+                                                      commit f58d264abc35f40dea64cb45262a4924323508f9
       (a fork of https://github.com/igawa6/eden-duo-companions; that commit is upstream's
       2169928d2f301aa7bb3b13777ca8a94d0e73961d plus the Tears of the Kingdom companion)
       GPL-3.0 (GPL-3.0-or-later per file)
@@ -19,7 +19,8 @@ assets/duo/, that game's companion package. They come from the Eden Duo project:
         Tears of the Kingdom:   native/modules/0100F2C0115B6000.cpp with totk_romfs, wonder_assets and wonder_font,
                                 packages/TearsOfTheKingdom. Its game-state reader, native/modules/totk_reader, is this
                                 app's own MIT reader (games/totk/runtime/companion_snapshot.c and its headers, copied
-                                unchanged) plus two MIT files written for the module; licence: totk_reader/LICENSE.MIT.
+                                unchanged) plus MIT files written for the module (game data, the quest catalogue) and
+                                this app's BYML reader (totk_byml.c); licence: totk_reader/LICENSE.MIT.
 
 Each build's libduo_host.so links one of the two modules (the game's own). It is a work based on the above and is
 licensed under the GNU General Public License, version 3 or (at your option) any later version; the licence text
@@ -40,7 +41,10 @@ games/totk/duo/CMakeLists.txt under games/totk/android/build_release.py, which t
 games/games.toml (tools/games.py). The tree holds the vendored Eden Duo and companion files at the commits above
 (games/totk/duo/vendor, with every local change listed in its README.md; among them, modified 2026-11-17: the Breath
 of the Wild page's "Area unavailable" label no longer shows, and its minimap is north up unless the player turns it with
-the camera, flag map_rotate, in native/modules/botw_map_view.h, 01007EF00011E000.cpp and the package's manifest.json),
+the camera, flag map_rotate, in native/modules/botw_map_view.h, 01007EF00011E000.cpp and the package's manifest.json;
+modified 2026-11-18: the left panel's setting, flag left_mode, and its Champion powers switches, one guarded byte write
+per change, greppable champion_toggle: native/modules/botw_champion_toggle.h (new), botw_ready_panes.h,
+01007EF00011E000.cpp, 01007EF00011E000_actions.h, the package's manifest.json and README.md),
 the port's shim and host code, the rest of the
 app, and its build scripts, which fetch the other third-party sources at pinned commits and name the two prebuilt
 inputs (the Turnip driver: its recipe is games/totk/android/turnip; the shader translator: games/totk/tools/totk_xlate).

@@ -137,6 +137,7 @@ The options were written for Tears of the Kingdom and most are untested with Bre
 | Console mode | Handheld is tested; Docked is untested |
 | Second screen | The Eden Duo companion (below) |
 | Second screen map | North up (default) or Rotate with camera: the companion's minimap turns with the camera whatever the game's own minimap option is |
+| Left panel | Quest details (default: the main quest, a side quest and the powers, swiped) or Powers (the Sages or Champions only, each with an On/Off switch; in Breath of the Wild an Off power stays off in that save until turned on again there) |
 
 Developer switches that differ from Tears of the Kingdom (in `totk.env`, see [docs/developer-settings.md](docs/developer-settings.md)):
 
