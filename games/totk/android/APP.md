@@ -1500,7 +1500,8 @@ apps (`TOTK_DUO_TOUCH=0` in `totk.env` turns it off; a release build's private g
 the default is what players get). The page's minimap is north up in both apps; the menu's *Graphics → Screen →
 Second screen map* (*North up* / *Rotate with camera*, settings.env `TOTK_DUO_MAP_ROTATE=1`) sets the packages' flag
 `map_rotate` at every start (`duo_host.cpp` `ApplyMapPreference`; the runtime's persisted value of that flag is not
-used, and a change on the page's own settings page, opened by holding the minimap, lasts until the game ends). Breath of
+used, and a change on the page's own settings page, opened by holding the minimap, lasts until the game ends; the host
+adds a note under that row saying so and naming the menu option). Breath of
 the Wild's module turns the map with the camera whatever the game's own minimap option is (a local change,
 `duo/vendor/README.md`); Tears of the Kingdom's turns it with Link's facing, as no camera direction is read.
 `TOTK_DUO=0` turns it off, `TOTK_DUO=module` logs the module's values

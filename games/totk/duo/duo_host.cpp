@@ -36,6 +36,7 @@
 #include <semaphore>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -46,6 +47,7 @@
 #include "core/mods/dsmod_module_abi.h"
 #include "core/mods/dsmod_module_extensions.h"
 #include "core/mods/mod_runtime.h"
+#include "core/mods/mod_settings.h"
 #include "duo_host.h"
 #include "duo_state.h"
 #include "video_core/dsmod/aux_routing.h"
@@ -330,11 +332,17 @@ bool WaitForPackage() {
     return false;
 }
 
+/// Shown under the Minimap row on the companion's settings page in the apps (ApplyMapPreference).
+constexpr std::string_view MapNoteText =
+    "A change here lasts until the game closes. To keep it, set Second screen map in the app's Graphics menu.";
+
 /// The menu's "Second screen map" (Graphics -> Screen, both games; settings.env TOTK_DUO_MAP_ROTATE=1, absent = North
 /// up): the package's "Minimap" settings row, flag map_rotate (0 north up, 1 turning with the view; both companion
 /// packages carry it), starts at the menu's value on every start. The flag is then neither restored from nor saved to the
 /// runtime's persisted-flags file: the choice lives in the app's menu, and a change made on the companion's own settings
-/// page (hold the minimap) lasts until the game ends. A package without the row is left as it is.
+/// page (hold the minimap) lasts until the game ends. That page says so under the row (a note added to the runtime's
+/// generated "@settings" page), so a player who turns it there knows where to keep it. A package without the row is
+/// left as it is.
 void ApplyMapPreference(Core::Mods::Manifest& manifest) {
     static const std::string Flag = "map_rotate";
     if (!manifest.flag_defaults.contains(Flag)) {
@@ -344,6 +352,37 @@ void ApplyMapPreference(Core::Mods::Manifest& manifest) {
     manifest.flag_defaults.insert_or_assign(Flag, rotate ? 1 : 0);
     std::erase(manifest.persist_flags, Flag);
     Say("duo: minimap {} (TOTK_DUO_MAP_ROTATE={})", rotate ? "turns with the view" : "north up", rotate ? 1 : 0);
+
+    // The note under the row on the generated settings page (mod_settings.cpp: rows "@settings.row.<flag>", values
+    // "@settings.value.<flag>"), in the value colour, wrapped to the row's width.
+    const auto page = std::ranges::find(manifest.pages, Core::Mods::SettingsPageId, &Core::Mods::Page::id);
+    if (page == manifest.pages.end()) {
+        return;
+    }
+    auto& widgets = page->widgets;
+    const auto row = std::ranges::find(widgets, "@settings.row." + Flag, &Core::Mods::Widget::id);
+    if (row == widgets.end()) {
+        return;
+    }
+    const auto [x, y, w, h] = row->rect;
+    const s32 inset = std::max(0, row->text_inset);
+    const s32 scale = std::max(2, row->text_scale * 2 / 3);
+    u32 color = row->color;
+    if (const auto value = std::ranges::find(widgets, "@settings.value." + Flag, &Core::Mods::Widget::id);
+        value != widgets.end()) {
+        color = value->color;
+    }
+    Core::Mods::Widget note;
+    note.type = Core::Mods::WidgetType::Label;
+    note.id = "@settings.note." + Flag;
+    note.rect = {x + inset, y + h + scale * 4, 0, 0};
+    note.align = 0;
+    note.text = std::string{MapNoteText};
+    note.text_scale = scale;
+    note.wrap_width = std::max(1, w - 2 * inset);
+    note.max_lines = 3;
+    note.color = color;
+    widgets.push_back(std::move(note)); // row and value are not used after this
 }
 
 bool StartRuntime() {

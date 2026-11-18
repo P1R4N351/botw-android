@@ -5,6 +5,7 @@ The real CompanionView (TotK Native's MIT page, compiled into every app and chos
 with a GameBuild that names it), DuoSurfaceView (the Eden Duo page of both games), the one CompanionContent (which picks
 by GameBuild.COMPANION, generated from games/games.toml for each game) and PresentationController's pump run here on a
 plain JVM over the smallest android.* that compiles them."""
+import re
 import shutil
 import subprocess
 import sys
@@ -557,6 +558,31 @@ class DuoMapTurn(unittest.TestCase):
         self.assertLess(start.index('ApplyMapPreference(*manifest);'), start.index('g_runtime.emplace('))
         entry = host[host.index('void ApplyMapPreference('):host.index('bool StartRuntime() {')]
         self.assertNotIn('title_id', entry)   # one rule for both games
+
+    def test_the_settings_page_says_a_change_there_is_for_this_game(self):
+        # In the apps the menu decides map_rotate at every start, so the companion's own settings row (hold the minimap)
+        # only lasts until the game closes. The host adds a note under that row saying so and naming the menu option.
+        host = (ROOT / 'games/totk/duo/duo_host.cpp').read_text()
+        entry = host[host.index('void ApplyMapPreference('):host.index('bool StartRuntime() {')]
+        note = re.search(r'MapNoteText =\s*"([^"]+)";', host).group(1)
+        self.assertIn('until the game closes', note)
+        menu = (ROOT / 'games/totk/android/java/com/aure/totk/setup/Strings.java').read_text()
+        self.assertIn('case "duo_map": return "Second screen map";', menu)
+        self.assertIn('Second screen map', note)
+        self.assertIn("Graphics", note)
+        self.assertTrue(note.isascii())
+        # The ids the runtime gives the generated row and value (mod_settings.cpp) are the ones the host looks for.
+        settings = (ROOT / 'games/totk/duo/vendor/emu/src/core/mods/mod_settings.cpp').read_text()
+        self.assertIn('row.id = std::format("@settings.row.{}", def.flag);', settings)
+        self.assertIn('value.id = std::format("@settings.value.{}", def.flag);', settings)
+        self.assertIn('"@settings.row." + Flag', entry)
+        self.assertIn('"@settings.value." + Flag', entry)
+        self.assertIn('Core::Mods::SettingsPageId', entry)
+        self.assertIn('note.wrap_width', entry)
+        self.assertLess(entry.index('std::erase(manifest.persist_flags, Flag);'), entry.index('widgets.push_back('))
+        readme = (ROOT / 'games/totk/duo/vendor/companions/packages/TearsOfTheKingdom/README.md').read_text()
+        self.assertIn('unless the host decides it', readme)
+        self.assertIn('until the game closes', readme)
 
     def test_docs_name_the_setting(self):
         for doc in ('docs/developer-settings.md', 'docs/companion.md', 'games/totk/android/APP.md',

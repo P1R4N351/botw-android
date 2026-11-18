@@ -8,7 +8,7 @@
 > minimap is north up in both games; *Graphics → Screen → Second screen map* turns it with the view instead (*Rotate
 > with camera*: Breath of the Wild follows the camera, Tears of the Kingdom Link's facing, since no camera direction is
 > read), settings.env `TOTK_DUO_MAP_ROTATE=1`. Holding the minimap opens the page's own settings, where the same choice
-> lasts for the current game. The setup no longer
+> lasts until the game closes; a note under the row says so and points to the menu. The setup no longer
 > prepares *Second-screen art*. The rest of this page describes the earlier companion (`CompanionView`), which stays
 > in the source, unused, until it is either brought back or removed.
 
