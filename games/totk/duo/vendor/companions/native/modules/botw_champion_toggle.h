@@ -21,14 +21,20 @@
 // item is still a key item (type 9, 4 bytes), the byte is still what was seen (1 byte, the only store). Before it,
 // the item is checked live: 1.6.0 only (build 8E9978D5), the manager's vtable, the slot's item named Obj_(DLC_)
 // HeroSoul_<X>, its byte 0 or 1, and the very item the pouch snapshot lists, the only key item of that power. Applied
-// only in the world or the pause menu, outside events, and in the world only while the power's own state reads stable
-// (the getters are asked when a power is about to fire; a change takes effect at the next use). Not offered on 1.9.0
-// (its slots were not researched). The byte seen before the first change of the session is kept and published.
+// only in the pause menu, outside events: a switch tapped in the world waits for the pause ("Applies when you pause"),
+// since a power's state reading stable (ChampionAbility::valid) is also true while it is in use, and a change landing
+// mid-use was not researched. Not offered on 1.9.0 (its slots were not researched). The byte seen before the first
+// change of the session is kept and published.
 //
-// To verify on the device before release (read-only first): *(PMDM+0x44520) equals the Goron item the pouch snapshot
-// lists and its +0x24 reads 1 with the power on (botw_ready_panes.h notes a HUD observation that disagrees), then a
-// power turned off: the HUD icon goes, the power does not fire, save + reload + restart keep it off, Turn all on
-// restores it.
+// NOT OFFERED YET (Verified below, like the TotK sages' verified_sages): a release blocker. Upstream's
+// botw_ready_panes.h saw the HUD show Daruk's Protection available while this byte was clear, and the verifier found
+// game writers of +0x24 the study missed; a wrong lever would put a byte into the save (PorchItem_EquipFlag) that a
+// save carries to the stock game. Until Verified is set no write is requested, the rows keep the power's live state
+// (no On/Off shown, the byte's meaning being the open question) and the note says the switches are not available yet.
+// To verify on the device before setting it (read-only first): *(PMDM+0x44520) equals the Goron item the pouch
+// snapshot lists and its +0x24 reads 1 with the power on; then, on a copy of a save, a power turned off: the HUD icon
+// goes, the power does not fire, save + reload + restart keep it off, Turn all on restores it; a change made in the
+// pause menu while a power was in use (Daruk's bubble up, Revali's Gale charging) behaves.
 #include "botw_champions.h"
 #include "botw_context.h"
 #include "botw_inventory_offsets.h"
@@ -49,6 +55,7 @@ struct ChampionToggle {
   static constexpr std::array<const char*,4> Names{"Obj_HeroSoul_Zora","Obj_HeroSoul_Rito","Obj_HeroSoul_Goron","Obj_HeroSoul_Gerudo"};
   static constexpr std::array<const char*,4> Upgraded{"Obj_DLC_HeroSoul_Zora","Obj_DLC_HeroSoul_Rito","Obj_DLC_HeroSoul_Goron","Obj_DLC_HeroSoul_Gerudo"};
   static constexpr int Tries=5;
+  static constexpr bool Verified=false;   // set only after the device checks above pass
   EdenDsmodHostWriteApi writer{};bool has_writer{};
   // the request from on_action: -1 none; slot*2+on; 8 = turn all on
   std::atomic<int> wanted{-1};
@@ -62,7 +69,7 @@ struct ChampionToggle {
   }
   static bool offered(const EdenDsmodHostApi& h){return matches_build(h,Build);}   // 1.6.0 only
   bool request(int argument) {
-    if(argument<0||argument>8||!has_writer)return false;
+    if(!Verified||argument<0||argument>8||!has_writer)return false;
     int none=-1;return wanted.compare_exchange_strong(none,argument);   // one at a time
   }
   struct Target {bool ok{};uint64_t slot{},item{};uint8_t byte{};};
@@ -85,12 +92,13 @@ struct ChampionToggle {
     t={true,slot,item,byte};return t;
   }
   // Sample thread, after the pouch snapshot: carries out the wanted change when the game allows it.
-  void step(const EdenDsmodHostApi& h,const Snapshot& pouch,UiContext ctx,bool event,const ChampionAbilities& ab) {
+  void step(const EdenDsmodHostApi& h,const Snapshot& pouch,UiContext ctx,bool event,const ChampionAbilities& /*abilities*/) {
     const int w=wanted.load();
     if(w<0)return;
     const auto finish=[&](std::string text){line=std::move(text);line_at=std::chrono::steady_clock::now();tries=0;wanted=-1;};
+    if(!Verified)return finish("Not available yet");
     if(!has_writer||!offered(h))return finish("Not possible in this host");
-    if(event||(ctx!=UiContext::World&&ctx!=UiContext::Menu)){if(++tries>Tries*10)finish("Not possible right now");return;}
+    if(event||ctx!=UiContext::Menu)return;   // pause menu only, outside events: waits there (publish says so)
     bool any=false,failed=false;
     for(unsigned i=0;i<4;++i) {
       const bool all=w==8;
@@ -99,7 +107,6 @@ struct ChampionToggle {
       const Target t=target(h,pouch,i);
       if(!t.ok){if(!all)failed=true;continue;}   // Turn all on: powers not obtained are left alone
       if(t.byte==want)continue;
-      if(ctx==UiContext::World&&!ab[i].valid){if(++tries>Tries*10)return finish("Not possible right now");return;}
       if(original[i]<0){
         original[i]=t.byte;
         if(h.log){const std::string l="BOTW champion power "+std::to_string(i)+": first change, byte was "+std::to_string(t.byte);h.log(h.userdata,1u,l.c_str());}
@@ -117,12 +124,12 @@ struct ChampionToggle {
   // Champion powers (left_mode 1): each owned power's switch (by the pouch, canonical slots), the Turn all on button
   // and the line under the panel. Also blanks the row text of a power that is off (the switch says it).
   void publish(const EdenDsmodHostApi& h,const Snapshot& pouch,bool powers,UiContext ctx,bool event) {
-    const bool live=powers&&has_writer&&offered(h)&&wanted.load()<0&&!event&&(ctx==UiContext::World||ctx==UiContext::Menu);
+    const bool live=Verified&&powers&&has_writer&&offered(h)&&wanted.load()<0&&!event&&(ctx==UiContext::World||ctx==UiContext::Menu);
     bool any_off=false;
     for(unsigned i=0;i<4;++i) {
       const Item* owned{};unsigned n{};
       if(pouch.valid)for(const auto& it:pouch.items)if(it.type==9&&(it.actor==Names[i]||it.actor==Upgraded[i])){owned=&it;++n;}
-      const bool show=powers&&n==1;
+      const bool show=Verified&&powers&&n==1;   // unverified: no On/Off (what the byte means is the open question)
       const bool on=show&&owned->equipped;
       any_off|=show&&!on;
       Key k("botw.ready.champion_slot.",i);
@@ -138,7 +145,8 @@ struct ChampionToggle {
     std::string note;
     if(powers) {
       const bool recent=!line.empty()&&std::chrono::steady_clock::now()-line_at<std::chrono::seconds{5};
-      if(wanted.load()>=0)note="Changing\xE2\x80\xA6";
+      if(!Verified)note="Switches not available yet";
+      else if(wanted.load()>=0)note=ctx==UiContext::Menu&&!event?"Changing\xE2\x80\xA6":"Applies when you pause";
       else if(recent)note=line;
       else if(!offered(h))note="Switches need version 1.6.0";
       else if(!has_writer)note="Switches are not available in this host";

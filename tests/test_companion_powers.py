@@ -141,8 +141,15 @@ class ChampionPowers(unittest.TestCase):
         self.assertIn('const EdenDsmodWriteOp ops[3]{{t.slot,8,0,&item,&item},{t.item+0x18,4,0,&key,&key},'
                       '{t.item+0x24,1,0,&seen,&want}};', toggle)
         self.assertIn('if(original[i]<0){', toggle)                       # the byte seen before the first change
-        self.assertIn('ctx!=UiContext::World&&ctx!=UiContext::Menu', toggle)
-        self.assertIn('ctx==UiContext::World&&!ab[i].valid', toggle)      # in the world: the power's state stable
+        self.assertIn('if(event||ctx!=UiContext::Menu)return;', toggle)    # pause menu only: never mid-use in the world
+        self.assertNotIn('ab[i].valid', toggle)                           # a stable read is not an idle power
+        # not offered until the device checks pass (the TotK sages' verified_sages counterpart)
+        self.assertIn('static constexpr bool Verified=false;', toggle)
+        self.assertIn('if(!Verified||argument<0', toggle)
+        self.assertIn('if(!Verified)return finish(', toggle)
+        self.assertIn('const bool live=Verified&&', toggle)
+        self.assertIn('const bool show=Verified&&', toggle)
+        self.assertIn('"Switches not available yet"', toggle)
         self.assertIn('Off stays off in this save until turned on here', toggle)
         offsets = (MODULES / 'botw_inventory_offsets.h').read_text()
         self.assertIn('0x2CA6D50, // pouch_root', offsets)

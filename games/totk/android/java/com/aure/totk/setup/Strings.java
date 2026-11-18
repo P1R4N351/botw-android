@@ -231,7 +231,8 @@ final class Strings {
                     + "powers, each with an On/Off switch. In Tears of the Kingdom a switch summons or dismisses the "
                     + "sage, as the game's Key Items menu does. In Breath of the Wild it turns that Champion's power "
                     + "off or on, which the game itself never offers: a power you turn off stays off in that save "
-                    + "until you turn it on again there, so use Turn all on before playing the save elsewhere. Holding "
+                    + "until you turn it on again there, so use Turn all on before playing the save elsewhere. The "
+                    + "switches are not offered yet in either game: they wait for a check on a device. Holding "
                     + "the panel on the second screen changes this for the current game only.";
             case "buttons": return "Nintendo: every button does what its label says, so A is A. Xbox: buttons act by position like on a "
                     + "Switch, so the right-hand button is A even though it is labelled B. Choose Xbox for gamepads with Xbox labels.";

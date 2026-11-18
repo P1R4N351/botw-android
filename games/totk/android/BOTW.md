@@ -68,7 +68,10 @@ install.json                                          # format 1, game "botw", v
   `*(main+0x2CA6D50)`) equals the Goron item the pouch snapshot lists and its `+0x24` reads 1 with the power on (the
   upstream module notes a HUD observation that disagrees, `botw_ready_panes.h`); then, on a copy of a save, a power
   turned off: its HUD icon goes and it does not fire, a manual save, reload and restart keep it off, *Turn all on*
-  brings it back; a change while a power is in use (Daruk's bubble up, Revali's Gale charging).
+  brings it back; a change while a power is in use (Daruk's bubble up, Revali's Gale charging). Until these pass the
+  switches are not offered (`ChampionToggle::Verified = false`, the counterpart of the TotK sages' `verified_sages`):
+  the panel shows the Champions' live state and "Switches not available yet". This blocks enabling them, since the
+  upstream observation contradicts the byte. When offered, a change is applied only in the pause menu.
 
 ## Credits
 

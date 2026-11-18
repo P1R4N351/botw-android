@@ -13,7 +13,8 @@
 > with the distance to where they lead, then the Sages or Champions, swiped) or *Powers* (only the Sages or Champions,
 > each with an On/Off switch: a sage is summoned or dismissed as the game's Key Items menu does, through this app's
 > runtime; a Champion power is turned off or on, which stays in that save until turned on again there, with *Turn all
-> on*), settings.env `TOTK_DUO_LEFT_PANEL=powers`; holding the left pager opens the same choice. The setup no longer
+> on*; neither game's switches are offered yet, they wait for a check on a device), settings.env
+> `TOTK_DUO_LEFT_PANEL=powers`; holding the left pager opens the same choice. The setup no longer
 > prepares *Second-screen art*. The rest of this page describes the earlier companion (`CompanionView`), which stays
 > in the source, unused, until it is either brought back or removed.
 

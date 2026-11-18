@@ -1763,7 +1763,9 @@ Duo the switches show the state read-only (*Needs the TotK Native app*); no plai
 Breath of the Wild's *Powers* (BotW Native, `BOTW.md`) turns a Champion power off or on with one byte of its key item,
 through the runtime's guarded write (DuoPort ABI 4, `runtime/duo_port.c`: at most 4 stores of 1-8 bytes, each inside
 the game's heap, every expected value compared, all or none, on the game's thread at its next presented frame; the
-caller waits at most a quarter second). Tears of the Kingdom's build offers no such write.
+caller waits at most a quarter second), only in the pause menu. Like the sages' `verified_sages`, it is not offered
+until checked on a device (`ChampionToggle::Verified`, `BOTW.md`); until then the rows show the live state, no switches.
+Tears of the Kingdom's build offers no such write.
 
 ### Fixture preview (no game/native runtime)
 

@@ -46,7 +46,14 @@ This copy is vendored in BotW Native / TotK Native (`games/totk/duo/vendor/READM
   pager above: main quest, side quest, Champions) or *Champion powers*: the Champions only, each with an On/Off switch,
   and *Turn all on*. A switch writes one byte, the power's key item's equipped flag, which the game checks before a power
   fires and keeps in the save: a power turned off stays off in that save until it is turned on again here. 1.6.0 only;
-  the write goes through the host's write batch (every expected byte compared first). Not verified on a device yet.
+  the write goes through the host's write batch (every expected byte compared first), and only in the pause menu (a
+  switch tapped in the world waits for the pause). **Not offered yet** (`ChampionToggle::Verified` is false, a release
+  blocker): upstream's `botw_ready_panes.h` saw the HUD show a power available while that byte was clear, so until the
+  checks below pass on a device the panel shows the Champions' live state without switches and says "Switches not
+  available yet". To verify on the device before release, read-only first: `*(PMDM+0x44520)` equals the Goron item the
+  pouch snapshot lists and its `+0x24` reads 1 with the power on; then, on a copy of a save, a power turned off loses
+  its HUD icon and does not fire, save, reload and restart keep it off, *Turn all on* restores it, and a change made
+  while a power was in use behaves. Then set `Verified`.
 
 This README sits outside `dualscreen/` on purpose: the packager archives `dualscreen/` as is,
 and excludes source documentation from the portable archive.

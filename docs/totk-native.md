@@ -332,6 +332,7 @@ distance to where they lead, then the powers (the Sages in Tears of the Kingdom,
 swipe between them. Powers: only the powers, each with an On/Off switch. A sage's switch summons or dismisses the sage,
 as the game's Key Items menu does. A Champion's switch turns that power off or on, which the game itself never offers:
 a power you turn off stays off in that save until you turn it on again there (*Turn all on* turns every power back on).
+The switches are not offered yet in either game: they wait for a check on a device.
 Holding the panel on the second screen opens the same choice for the current game only. Shown next to *Second screen
 map*.
 
