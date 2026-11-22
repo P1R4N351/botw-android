@@ -236,9 +236,12 @@ Build either app: `tools/build_app.sh botw {dev,release}` or `tools/build_app.sh
 
 ## Support
 
-If this work is useful to you, donations are gratefully accepted:
+If this work is useful to you, donations are gratefully accepted. They are voluntary, unlock nothing, and go to this port's maintainers (PiSCES), not to the upstream TotK Native (AurelioB) project.
 
 - Bitcoin: `bc1q4a3lqcg87rvw7vxulausdqhhuwkwwa6w6v4mxx`
+- VitaDB profile: [PiSCES](https://www.rinnegatamante.eu/vitadb/#/user/PiSCES)
+
+Download builds only from this repository's [Releases](https://github.com/P1R4N351/botw-android/releases). Nobody will ever ask you for keys, game files or account details.
 
 ## Credits
 
