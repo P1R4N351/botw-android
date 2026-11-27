@@ -25,7 +25,7 @@ public final class GameBuild {
     public static final boolean ONDEVICE_SETUP = true;
     /** Theme.SEL (selection) and Theme.ZONAI (accent), and the hue Theme.tint gives the surfaces (-1: unchanged). */
     public static final int SEL = 0xffd4ea74, ACCENT = 0xff57dfbf, SURFACE_HUE = -1;
-    /** The emblem the menu draws: "island" or "sheikah_eye" (Widgets.Emblem). */
+    /** The emblem the menu draws: "island", "sheikah_eye" or "calamity_crest" (Widgets.Emblem). */
     public static final String EMBLEM = "island";
     /** The PC mod manager whose merge the Mods import takes. */
     public static final String MOD_MANAGER = "TKMM";
@@ -35,4 +35,6 @@ public final class GameBuild {
     public static final boolean TABLET_CAN_BE_MISSING = false;
     /** BifrostLooks row name: "TOTK" or "BOTW". */
     public static final String BIFROST_LOOKS = "TOTK";
+    /** Whether the app boots straight into the game by default when playable. */
+    public static final boolean DIRECT_BOOT = false;
 }

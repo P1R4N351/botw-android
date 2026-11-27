@@ -15,6 +15,13 @@
 #include "../../runtime/host_wait.h"
 #include "../../runtime/game_error.h"
 #include "vk_pcache.h"
+#include "vk_bind_wb_fast.h"
+#include "vk_fg_wb_fast.h"
+#include "vk_touch_alias_fast.h"
+#include "vk_ub_gw_fast.h"
+#include "vk_load_wb_fast.h"
+#include "vk_ans_widen_fast.h"
+#include "vk_copy_span_fast.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -138,7 +145,7 @@ uint64_t vk_game_submit_serial(void);    /* walking thread only; GPU chunks do n
     X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer) X(vkCmdCopyImage) X(vkCmdBlitImage) \
     X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage) X(vkCmdClearAttachments) \
     X(vkCmdPushConstants) X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) \
-    X(vkCmdBindVertexBuffers2) X(vkCmdBindIndexBuffer) X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdDispatch) \
+    X(vkCmdBindVertexBuffers2) X(vkCmdBindIndexBuffer) X(vkCmdDraw) X(vkCmdDrawIndexed) X(vkCmdDrawIndirect) X(vkCmdDrawIndexedIndirect) X(vkCmdDispatch) \
     X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdSetDepthBias) X(vkCmdSetBlendConstants) \
     X(vkCmdSetStencilCompareMask) X(vkCmdSetStencilWriteMask) X(vkCmdSetStencilReference) \
     X(vkCmdSetCullMode) X(vkCmdSetFrontFace) X(vkCmdSetPrimitiveTopology) X(vkCmdSetDepthTestEnable) \
@@ -236,6 +243,9 @@ int vk_resolve(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off);
 void vk_ub_touch(uint64_t addr, uint64_t n);   /* a non-uniform GPU access of [addr, +n): logged uniform updates there reach memory first */
 void vk_ub_flush(void);
 void vk_gpu_write(uint64_t addr, uint64_t n);   /* the GPU writes [addr, +n) in this submission: no uniform snapshot of it (now or while in flight) */
+int vk_gpu_write_pending(uint64_t addr, uint64_t n);   /* 1 if a GPU write in flight (or pending un-logged write) overlaps [addr, +n) */
+uint64_t vk_gpu_write_gen(void);   /* monotonic counter bumped whenever the GPU writes/updates buffers */
+void vk_gpu_write_bump(void);
 /* TOTK_VK_OFF=<name>,<name>,...: turn individual optimisations off (to find which one misbehaves). Names: rename (uniform
    renaming), ds (descriptor-set reuse), dyn (dynamic-state skipping), block (driver bank / c1 reuse), ts (GPU
    timestamps), span (pool index; off = the old linear scan), all. */
@@ -261,6 +271,7 @@ long vk_frame_chunk_limit(void); /* walking/startup only; explicit limit or effe
 int vk_in_pass(void);            /* a render pass is open on the recording thread (vk_draw.c) */
 void vk_pd_write_note(const char *what, uint64_t dst, uint64_t n, const void *data);   /* TOTK_VK_PASS_DUMP: a buffer write in index.txt (vk_draw.c) */
 int vk_counter_value(uint64_t addr, uint64_t *value);   /* newest pending report, else memory; 0 if real samples are still unknown */
+int vk_counter_pair(uint64_t addr0, uint64_t addr1, uint64_t *v0, uint64_t *v1);
 void vk_rec_unlock(void);
 /* Synchronous host readback handed to the current owner, never a blocking recording-lock acquisition.
    A chunk service may defer until its producer's slot seals; boundary=1 is a completed slot/ownership boundary.
@@ -381,6 +392,8 @@ int vk_resolve_span(uint64_t addr, VkBuffer *buf, uint64_t *off, uint64_t *avail
 enum { VK_LOOKUP_UBO, VK_LOOKUP_VERTEX, VK_LOOKUP_TOUCH, VK_LOOKUP_OTHER };
 int vk_resolve_for(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off, uint64_t *avail, int kind);   /* same lookup, tagged for TOTK_VK_LOOKUP_STATS */
 void vk_lookup_stats(uint64_t frame);   /* present's 300-frame report; no work unless enabled at device init */
+uint64_t vk_span_gen(void);
+int vk_lookup_stats_on(void);
 
 /* ---------- submissions (nvn_vk.c) ----------
    A submission records into two command buffers of its ring slot: "pre" (texture uploads, image creation barriers:
@@ -570,6 +583,10 @@ typedef struct vk_shader {
     uint32_t required_subgroup_size;
     VkDescriptorSetLayout dsl;
     int nb; vk_bind *b;
+    totk_sh_bind_sum_t bind_sum;
+    totk_sh_fg_sum_t fg_sum;
+    totk_sh_touch_sum_t touch_sum;
+    totk_sh_ub_gw_sum_t ub_gw_sum;
     uint8_t *c1; uint32_t c1_len;   /* the shader's own constant bank c1 (from its package) */
     uint32_t vin_mask;      /* vertex inputs read (location = NVN attribute) */
     uint8_t vin_class[32];  /* 0 float 1 uint 2 sint */
@@ -598,6 +615,9 @@ typedef struct vk_shader {
        reads that this vertex shader does not write added as (0, 0, 0, 1) (vk_vs_module_for). */
     uint32_t vout_mask, fin_mask; uint8_t fin_kind[32]; uint8_t io_known;
     struct vk_vfix *vfix;
+    struct vk_shader *alpha_memo[8];
+    uint64_t alpha_miss_epoch[8];
+    uint16_t alpha_ready_mask, alpha_miss_mask;
 } vk_shader;
 
 /* ---------- opt-in per-slot GPU pass profiler (vk_gpuprof.c) ---------- */
@@ -652,6 +672,8 @@ void vk_gpuprof_test_background(uint64_t counts[3]); /* enqueued, processed, dro
 typedef struct vk_prog vk_prog;
 /* The program's shaders for the current bind state (variant per stage): 0 ok, -1 a variant is missing (draw skipped) */
 int vk_prog_resolve(const prog_t *p, vk_shader *out[6]);
+int vk_prog_resolve_gfx(const prog_t *const progs[6], vk_shader *out[6]);
+int vk_prog_resolve_compute(const prog_t *p, vk_shader *out[6]);
 void vk_stage_sig_invalidate(unsigned stages);   /* recording-thread state writes: one bit per NVN stage */
 void vk_prog_prepare(const prog_t *p); /* bind-time compute compilation, no variant selection or graphics seed IO */
 VkShaderModule vk_vs_module_for(vk_shader *vs, const vk_shader *fs);   /* vs->mod, or one with fs's missing varyings added */
@@ -697,7 +719,7 @@ void vk_end_rendering_at(vk_pass_end_kind reason, uint32_t detail);
 void vk_pass_merge_counters(uint64_t out[4]);   /* deferred, retained, hazard splits, avoided boundaries */
 /* the bound state the shader variants are chosen by (vk_shader.c reads it) */
 typedef struct {
-    const prog_t *prog;
+    const prog_t *prog[6];
     blend_st blend[8]; color_st color; chmask_st chmask; ms_st ms; poly_st poly; ds_st ds;
     va_st attr[16]; int nattr; vs_st stream[16]; int nstream;
     NVNbufferRange vbuf[16];
@@ -705,10 +727,15 @@ typedef struct {
     uint64_t tex[6][128], samp[6][128], img[6][32];
     uint32_t st_vmask[2], st_wmask[2], st_ref[2];
     p_poly_offset po; float vp[16][6]; float dr[2]; int has_vp; int depth_clamp, render_disabled, raster_discard;
-    float blend_color[4], alpha_ref; int64_t copy_stride;
+    float blend_color[4], alpha_ref; int64_t copy_stride, copy_image_stride;
     p_scissor sc; int has_sc;
     p_set_rt rt; int has_rt;
     int tex_hi[6];
+    uint64_t tex_nz[6][2];
+    uint8_t tex_nz_ready;
+    uint32_t img_nz[6];
+    uint8_t img_nz_ready;
+    uint8_t ui_wid;
 } vk_state;
 extern vk_state S;
 int vk_prog_predict(const vk_state *state, vk_shader *out[6]);   /* borrowed ready variants only; no loads or active-state/memo changes */

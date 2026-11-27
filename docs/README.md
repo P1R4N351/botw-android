@@ -12,6 +12,7 @@
 - [first-launch-shaders.md](first-launch-shaders.md): first-launch preparation and pre-warming about eight thousand shaders (Chinese; Mac).
 - [frame-interpolation.md](frame-interpolation.md): 30 to 60 fps frame interpolation on Android (opt-in): status and design.
 - [how-it-works.md](how-it-works.md): how the Apple-silicon port works: loader, system services and graphics driver.
+- [ktgl-commonalities.md](ktgl-commonalities.md): Koei Tecmo KTGL engine commonalities shared by AoC Native and AoI Native.
 - [mods.md](mods.md): player RomFS mods (English and Chinese).
 - [performance-followups.md](performance-followups.md): Mac performance follow-ups and re-test methods (Chinese).
 - [pipeline-prediction-stalls.md](pipeline-prediction-stalls.md): pipeline prediction on the submission thread.

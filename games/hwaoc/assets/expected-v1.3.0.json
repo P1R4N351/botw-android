@@ -1,0 +1,30 @@
+{
+  "_comment": "Verified Age of Calamity 1.3.0 (v327680) ExeFS source pins, M1 Android rewriter pins (DM_HOST_TP=tpidr_el0, all structck+equiv pass), and merged BKTR RomFS pins.",
+  "title_id": "01002B00111A2000",
+  "version": 327680,
+  "display_version": "1.3.0",
+  "build_ids": {
+    "main": "c3cf52bf2b05d7310884971b50bcccb8974577bc000000000000000000000000",
+    "rtld": "51b657503637c8a8d6729ce7d8ddaa6a163c356a000000000000000000000000",
+    "sdk": "95832210b36121e88b4f9b7b66239dade9c82a67000000000000000000000000",
+    "subsdk0": "3ab92c3444d4ece2f52417b5d8ee86eb115212a3000000000000000000000000"
+  },
+  "exefs_sha256": {
+    "main": "84fbac8bb4734cdbeb3362a87479e484915682791688a2e8b2258b8229541022",
+    "main.npdm": "6ffc47950fde1f67e4024e621a01f8f7e062f233ccd2b892844424f95e7a7063",
+    "rtld": "b09545d23efe76925191e9ded2c5ca81179f07fc823162c2b367a63b82d8d9fc",
+    "sdk": "71a49827250b6bc2883ac44e5d42f4d20110a95d930c2387311c7ff415eb4534",
+    "subsdk0": "b515e170ed8799af63e0f2e1a58b344ec8c78605976a2148374d13e6ced93d30"
+  },
+  "android_rewritten_sha256": {
+    "main.patched.bin": "9adf35712d6c2d58dd52c4fe6eba0970e04cf5efec8a6dcc7acc36977185d84b",
+    "sdk.patched.bin": "b6cc413ad5854ab562a601dfe751c3ac588d6e3173893abd7b2bb4f8d828b573",
+    "subsdk0.patched.bin": "146e4de3ef491bde117d1160df3aa10723b79b2a0fbaf0904239f77c10913961"
+  },
+  "romfs": {
+    "files": 1101,
+    "size": 11719230892,
+    "sha256": "9006c2b8f752c27e2ca628507e45f871ea54d464945aa8d562266bc399f3f0e2",
+    "index_sha256": "76628b10dabab48e1ce2dc37606c90ffcb2cb05f1edd641653fc278a8143c376"
+  }
+}

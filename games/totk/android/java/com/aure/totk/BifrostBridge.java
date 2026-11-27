@@ -19,15 +19,37 @@ import java.util.Map;
  *
  *  TOTK_BIFROST (totk.env): 0 off; 2 the public effects instead of the Pip-Boy feed; anything else, or unset, on.
  *  Nothing here runs on a game thread, and no failure leaves this class: after one, the bridge stays off. */
-final class BifrostBridge {
+public final class BifrostBridge {
     private static final String TAG = "TotkBifrost";
     private static volatile BifrostBridge current;
+    public static volatile boolean enabled = true;
+    public static volatile boolean syncScreenBrightness = true;
+    public static volatile int lastScreenPct = -1;
+
+    public static float readScreenBrightness(Context ctx) {
+        try {
+            Object cr = ctx.getClass().getMethod("getContentResolver").invoke(ctx);
+            if (cr == null) return -1f;
+            Class<?> crCls = Class.forName("android.content.ContentResolver");
+            Class<?> sysCls = Class.forName("android.provider.Settings$System");
+            Object v = sysCls.getMethod("getInt", crCls, String.class, int.class)
+                    .invoke(null, cr, "screen_brightness", -1);
+            int raw = v instanceof Integer ? (Integer) v : -1;
+            if (raw < 0) return -1f;
+            float denom = raw <= 255 ? 255f : (raw <= 1023 ? 1023f : 4095f);
+            float norm = Math.max(0f, Math.min(1f, raw / denom));
+            lastScreenPct = Math.round(norm * 100f);
+            return norm;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return -1f;
+        }
+    }
     private final Context context;
     private final BifrostLooks.Feed feed;
     private final BifrostLooks.State state = new BifrostLooks.State();
     private HandlerThread thread;
     private volatile Handler worker;
-    private volatile boolean running, dead;
+    private volatile boolean running, dead, foreground, closed;
     private String said = "";
     private volatile int generation;
 
@@ -44,8 +66,24 @@ final class BifrostBridge {
     }
 
     /** UI thread: the game is in the foreground and running. */
+    public static void setEnabled(boolean on) {
+        enabled = on;
+        BifrostBridge b = current;
+        if (b == null) return;
+        if (!on) b.stop();
+        else if (b.foreground && !b.closed) b.start();
+    }
+
+    void pause() {
+        foreground = false;
+        stop();
+    }
+
     void start() {
-        if (running || dead) return;
+        if (closed || dead) return;
+        foreground = true;
+        current = this;
+        if (!enabled || running) return;
         try {
             if (worker == null) {
                 // The manifest's <queries> entry makes Bifrost visible here. Not installed: nothing is started.
@@ -72,7 +110,8 @@ final class BifrostBridge {
                     long now = SystemClock.elapsedRealtime();
                     List<BifrostLooks.Command> commands;
                     String reason;
-                    synchronized (feed) { commands = feed.poll(now, have ? state : null); reason = feed.muteReason(now); }
+                    float bri = syncScreenBrightness ? readScreenBrightness(context) : -1f;
+                    synchronized (feed) { feed.setScreenBrightness(bri); commands = feed.poll(now, have ? state : null); reason = feed.muteReason(now); }
                     send(commands);
                     if (!reason.equals(said)) { said = reason; if (!reason.isEmpty()) Log.i(TAG, reason + "; trying again later"); }
                 } catch (Throwable failed) { fail(failed); return; }
@@ -96,6 +135,8 @@ final class BifrostBridge {
 
     /** UI thread, before the process ends: the clear is sent here, since the worker may never run again. */
     void close() {
+        closed = true;
+        foreground = false;
         running = false;
         ++generation;
         if (current == this) current = null;

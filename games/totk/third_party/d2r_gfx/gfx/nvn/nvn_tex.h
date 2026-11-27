@@ -2,11 +2,12 @@
 // NVN texture storage layout (Tegra X1 block-linear), see nvn_tex.c.
 #pragma once
 #include <stdint.h>
+#include "totk_tex_layout_fast.h"
 
 typedef struct {
     int target, format, flags, samples;   // NVNtextureTarget / NVNformat / NVNtextureFlags / 采样数（0 或 1 = 单采样） | NVNtextureTarget / NVNformat / NVNtextureFlags / sample count (0 or 1 = single-sampled)
     uint32_t width, height, depth, levels, stride;
-    signed int pkg_block_h:8; unsigned int swizzle_r:3,swizzle_g:3,swizzle_b:3,swizzle_a:3,swizzle_pad:12;                      // 预排布贴图布局参数第 0 字节 + 1（低半字节块高 log2，高半字节块深 log2）；0 = 按自动算法 | Byte 0 of the packaged texture layout parameters + 1 (low nibble log2 block height, high nibble log2 block depth); 0 = use the automatic algorithm
+    signed int pkg_block_h:8; unsigned int swizzle_r:3,swizzle_g:3,swizzle_b:3,swizzle_a:3,dsmode:1,swizzle_pad:11;                      // 预排布贴图布局参数第 0 字节 + 1（低半字节块高 log2，高半字节块深 log2）；0 = 按自动算法 | Byte 0 of the packaged texture layout parameters + 1 (low nibble log2 block height, high nibble log2 block depth); 0 = use the automatic algorithm
 } nvn_texdesc;
 
 typedef struct {
@@ -27,7 +28,11 @@ void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, 
 static inline int nvn_tex_is_linear(const nvn_texdesc *d) { return (d->flags & 0x50) != 0; }
 static inline uint32_t nvn_tex_linear_stride(const nvn_texdesc *d) {
     if (d->stride) return d->stride;
+    uint32_t align = (d->flags & 0x40) ? 128u : 32u;
+    if (totk_tex_layout_fast_on()) {
+        totk_fmt_fast_t t = totk_nvn_fmt_lookup(d->format);
+        return (totk_blk_fast(d->width, t.bw) * t.bpb + align - 1u) & ~(align - 1u);
+    }
     int bw, bh; int bpb = nvn_fmt_bpb(d->format, &bw, &bh);
-    uint32_t align = (d->flags & 0x40) ? 128 : 32;
     return (((d->width + bw - 1) / bw) * bpb + align - 1) & ~(align - 1);
 }

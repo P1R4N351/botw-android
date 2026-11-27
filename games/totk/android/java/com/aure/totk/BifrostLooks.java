@@ -30,7 +30,7 @@ final class BifrostLooks {
     static final int RESULT_UNHANDLED = 7001;
 
     // ---- the looks: one table ----
-    static final int TOTK = 0, BOTW = 1, BOTW_NO_SLATE = 2;        // palette (row)
+    static final int TOTK = 0, BOTW = 1, BOTW_NO_SLATE = 2, HWAOC = 3;   // palette (row)
     static final int BASE = 0, OPEN = 1, LOW = 2;                  // kind (column)
 
     static final class Look {
@@ -74,6 +74,8 @@ final class BifrostLooks {
                               new Look("sheikah-slate-open", 0xa6ebff, 77, false, 60, "STATIC", 0.5f, 255), LOW_HEARTS },
         /* BOTW_NO_SLATE */ { new Look("slate-inactive", hue(0xff9b3d), 77, false, 60, "BREATH", 0.10f, 150),
                               new Look("slate-inactive-open", 0xffb870, 77, false, 60, "STATIC", 0.5f, 255), LOW_HEARTS },
+        /* HWAOC         */ { new Look("sheikah-blue", 0x0060ff, 82, false, 60, "BREATH", 0.10f, 160),
+                              new Look("sheikah-blue-open", 0x3888ff, 85, false, 60, "STATIC", 0.5f, 255), LOW_HEARTS },
     };
 
     // ---- the game state the feed works from (BifrostState reads it from the common state) ----
@@ -90,6 +92,16 @@ final class BifrostLooks {
     }
     /** Low hearts start at one heart or a quarter of the maximum (rounded up to a quarter heart), whichever is more,
      *  and end one heart above that (or at full), so a quarter-heart tick at the edge does not toggle the look. */
+    /** Scales a look's base LED intensity by the device screen brightness ([0..1], or <0 to disable). */
+    static int scaleIntensity(int base, float screenLevel) {
+        int clamped = Math.max(0, Math.min(255, base));
+        if (!Float.isFinite(screenLevel) || screenLevel < 0f) return clamped;
+        if (screenLevel <= 0.001f) return 0;
+        float s = Math.min(1f, screenLevel);
+        float factor = 0.08f + 0.92f * (float) Math.pow(s, 0.85);
+        return Math.max(1, Math.min(255, Math.round(clamped * factor)));
+    }
+
     static int lowOn(int maxLife) { return Math.max(4, (maxLife + 3) / 4); }
     static int lowOff(int maxLife) { return Math.min(maxLife, lowOn(maxLife) + 4); }
 
@@ -247,13 +259,25 @@ final class BifrostLooks {
         }
         private void count(long now) { sent[sentCount % sent.length] = now; sentCount++; if (sentCount >= 2 * sent.length) sentCount -= sent.length; }
 
+        private float screenLevel = -1f;
+
+        /** Updates screen brightness ([0..1], or <0 for unscaled); marks dirty on >=4% change. */
+        void setScreenBrightness(float level) {
+            float next = (!Float.isFinite(level) || level < 0f) ? -1f : Math.min(1f, level);
+            boolean modeFlip = (next < 0f) != (screenLevel < 0f);
+            if (modeFlip || Math.abs(next - screenLevel) >= 0.04f) {
+                screenLevel = next;
+                if (shown != null) dirty = true;
+            }
+        }
+
         private Command display(long now) {
             Look look = shown;
             Command c = new Command(ACTION_DISPLAY, true);
             c.extras.put("effect", classic ? look.classicEffect : "PIPBOY");
             c.extras.put("color", look.color);
             c.extras.put("colorRight", look.color);
-            c.extras.put("intensity", classic ? look.classicIntensity : look.intensity);
+            c.extras.put("intensity", scaleIntensity(classic ? look.classicIntensity : look.intensity, screenLevel));
             c.extras.put("intensityScale", 255);
             c.extras.put("speed", classic ? look.classicSpeed : 0.5f);
             c.extras.put("priority", look.priority);

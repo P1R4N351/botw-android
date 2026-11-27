@@ -5,6 +5,16 @@ the game version it runs is shown separately. versionCode = major × 10000 + min
 
 ## Unreleased
 
+### Shared runtime, Vulkan & hardware improvements (from AoC Native sync)
+- Port optimization waves (`Opts 2–60`) across Vulkan command/descriptor/PSO/shader-cache/compute/copy/overlay paths,
+  NVN HLE/deswizzle, Horizon SVC/HID/RomFS/time/gate, AAudio/ADPCM, VP9 NV12, and adaptive frame pacing.
+- Vulkan graphics fixes: retype `sampler2D` buffer-texture reads to `UNIFORM_TEXEL_BUFFER` (`vk_tbuf_spv.h`) with
+  `R32_UINT`/`R32_SINT` float views, add a one-slice 3D copy alias for CPU-backed 2D textures bound to 3D slots,
+  and strip `NEAR_IS_MINUS_W` from seed vertex shaders when `NEAR_IS_ZERO` is active (`vk_depth_spv.h`).
+- Read `persist.sys.gamepad.type` on AYN handhelds so Xbox Controller style maps face buttons by position
+  (`TOTK_FACE_BUTTONS=position`).
+- Scale Bifrost stick ring LED intensity automatically by system screen brightness (`BifrostBridge.syncScreenBrightness`).
+
 ### Second screen
 - The main (Adventure) page is laid out like Breath of the Wild's Ready page on landscape second screens (AYN Thor). It
   has:

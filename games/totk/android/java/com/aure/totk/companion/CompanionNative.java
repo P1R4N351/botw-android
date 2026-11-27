@@ -45,6 +45,18 @@ public final class CompanionNative implements DataSource {
     /** The common game state (runtime/companion_state.h) as CompanionState.FIELDS words; false: none to read. */
     private static native boolean nativeState(long[] out);
     private static native void nativePage(int page);
+    private static native String warriorsDetailNative(int[] ints, float[] flts);
+    private static native boolean warriorsFireNative(int actionId);
+    private static native void warriorsAbortNative();
+    private static native int warriorsPinNative(int op, int slot, String label);
+    private static native int overlaySetModeNative(int mode);
+    private static native int warriorsMinimapNative(byte[] rgbaOut, int[] meta);
+    private static native int warriorsMinimapCycleNative();
+    private static native void warriorsMinimapEnableNative(boolean on);
+    private static native void warriorsStreamModeNative(int stream, int mode);
+    private static native int warriorsObjectiveNative(byte[] rgbaOut, int[] meta);
+    private static native int warriorsLeftHudNative(byte[] rgbaOut, int[] meta);
+    private static native int warriorsUiTexNative(byte[] rgbaOut, int[] meta, boolean request);
 
     @Override public String read(int detail) {
         if (!loaded) return "{\"schema\":1,\"seq\":0,\"status\":\"unsupported\"}";
@@ -75,5 +87,67 @@ public final class CompanionNative implements DataSource {
         if (!loaded) return null;
         try { return result(seq); }
         catch (UnsatisfiedLinkError unavailable) { loaded = false; return null; }
+    }
+    @Override public String warriorsDetail(int[] ints, float[] flts) {
+        if (!loaded) return null;
+        try { return warriorsDetailNative(ints, flts); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return null; }
+    }
+    @Override public boolean warriorsFire(int actionId) {
+        if (!loaded) return false;
+        try { return warriorsFireNative(actionId); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return false; }
+    }
+    @Override public void warriorsAbort() {
+        if (!loaded) return;
+        try { warriorsAbortNative(); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; }
+    }
+    @Override public int warriorsPin(int op, int slot, String label) {
+        if (!loaded) return -1;
+        try { return warriorsPinNative(op, slot, label); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return -1; }
+    }
+    /** Queries (<0) or sets (0 off, 1 fps, 2 full) Display 0 Vulkan corner overlay mode. */
+    public static int setOverlayMode(int mode) {
+        if (!loaded) return mode < 0 ? 0 : mode;
+        try { return overlaySetModeNative(mode); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return mode < 0 ? 0 : mode; }
+    }
+    public static int warriorsMinimap(byte[] rgbaOut, int[] meta) {
+        if (!loaded || rgbaOut == null || meta == null || meta.length < 5) return 0;
+        try { return warriorsMinimapNative(rgbaOut, meta); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return 0; }
+    }
+    public static int warriorsMinimapCycle() {
+        if (!loaded) return 0;
+        try { return warriorsMinimapCycleNative(); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return 0; }
+    }
+    /** Where a captured module is shown: stream 0 minimap, 1 objective bar, 2 HUD column; mode 0 second screen, 1 first screen, 2 neither. */
+    public static void warriorsStreamMode(int stream, int mode) {
+        if (!loaded) return;
+        try { warriorsStreamModeNative(stream, mode); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; }
+    }
+    public static void warriorsMinimapEnable(boolean on) {
+        if (!loaded) return;
+        try { warriorsMinimapEnableNative(on); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; }
+    }
+    public static int warriorsObjective(byte[] rgbaOut, int[] meta) {
+        if (!loaded || rgbaOut == null || meta == null || meta.length < 4) return 0;
+        try { return warriorsObjectiveNative(rgbaOut, meta); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return 0; }
+    }
+    public static int warriorsLeftHud(byte[] rgbaOut, int[] meta) {
+        if (!loaded || rgbaOut == null || meta == null || meta.length < 4) return 0;
+        try { return warriorsLeftHudNative(rgbaOut, meta); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return 0; }
+    }
+    public static int warriorsUiTex(byte[] rgbaOut, int[] meta, boolean request) {
+        if (!loaded || rgbaOut == null || meta == null || meta.length < 4) return 0;
+        try { return warriorsUiTexNative(rgbaOut, meta, request); }
+        catch (UnsatisfiedLinkError unavailable) { loaded = false; return 0; }
     }
 }

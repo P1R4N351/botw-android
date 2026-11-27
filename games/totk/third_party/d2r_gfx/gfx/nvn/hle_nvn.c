@@ -24,6 +24,8 @@
 #include "nvn_count.h"
 #include "nvn_tex.h"
 #include "nvn_hmap.h"
+#include "totk_nvn_sub_fast.h"
+#include "totk_nvn_hle_fast.h"
 #include "nvn_mtl.h"
 #include "nvn_pace.h"
 #include "nvn_diag_range.h"
@@ -160,6 +162,8 @@ NVN(nvnDeviceGetProcAddress, PFNNVNGENERICFUNCPTRPROC, const NVNdevice *d, const
 static const int g_devinfo[] = {
 #ifdef GAME_BOTW
     [0x00] = 53, [0x01] = 311,  // Breath of the Wild 1.6.0 main+0xe55304 requires major 53, minor >= 311 (botw.md).
+#elif defined(GAME_HWAOC)
+    [0x00] = 53, [0x01] = 312,  // Age of Calamity 1.3.0 main+0x9f94..0x9f9c requires major 53, minor >= 312.
 #else
     [0x00] = 55, [0x01] = 15,   // Experimental ABI target: TOTK main+e9d614 requires major 55, minor >= 15. Unsupported functions stop.
 #endif
@@ -209,7 +213,7 @@ NVN(nvnDeviceInstallDebugCallback, void, NVNdevice *d, const PFNNVNDEBUGCALLBACK
     dev_t_ *o = (dev_t_ *)d; o->dbg_cb = B(enable) ? (void *)cb : NULL; o->dbg_data = data;
 }
 NVN(nvnDeviceSetWindowOriginMode, void, NVNdevice *d, NVNwindowOriginMode m) { ((dev_t_ *)d)->origin = m; LOG("[nvn] 窗口原点 %s", m ? "左上（同 D3D / Metal）" : "左下（GL）"); }
-#ifdef GAME_BOTW
+#if defined(GAME_BOTW) || defined(GAME_HWAOC)
 /* NVN's default depth mode is NEAR_IS_MINUS_W (enum value 0, the OpenGL convention): a device the game never calls
    nvnDeviceSetDepthMode on keeps it. TOTK sets it explicitly; Breath of the Wild never does, and its full-screen copy
    to the swapchain has clip z = -1 (the near plane), which the 0..w convention clipped away: the window stayed magenta
@@ -335,6 +339,9 @@ NVN(nvnTexturePoolRegisterTexture, void, const NVNtexturePool *tp, int id, const
                 vv ? "yes" : "no", vv && vv->set_format ? vv->format : 0, vv && vv->set_levels ? vv->base_level : -1, vv && vv->set_levels ? vv->nlevels : 0); } }
     totk_life_reg(id, (const tex_t *)t);
     mtl_reg_tex(id, (const tex_t *)t, (const view_t *)v); }
+NVN(nvnTexturePoolRegisterImage, void, const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v) {
+    h_nvnTexturePoolRegisterTexture(tp, id, t, v);
+}
 
 NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t off, int n) {
     *(dpool_t *)sp = (dpool_t){(const pool_t *)p, off, n}; OLOG("SamplerPool n=%d", n); return 1;
@@ -369,8 +376,10 @@ static void size_chain(int w, int h) {
 NVN(nvnTextureBuilderSetSize3D, void, NVNtextureBuilder *b, int w, int h, int d) { TB(b)->d.width=w;TB(b)->d.height=h;TB(b)->d.depth=d; }
 NVN(nvnTextureBuilderSetLevels, void, NVNtextureBuilder *b, int v) { TB(b)->d.levels = v; }
 NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)->d.format = f; }
-// This adapter currently samples the depth plane; stencil-only sampling stops.
-NVN(nvnTextureBuilderSetDepthStencilMode, void, NVNtextureBuilder *b,NVNtextureDepthStencilMode mode){(void)b;if(mode!=NVN_TEXTURE_DEPTH_STENCIL_MODE_DEPTH)die("stencil-plane texture sampling is not implemented");}
+NVN(nvnTextureBuilderSetDepthStencilMode, void, NVNtextureBuilder *b, NVNtextureDepthStencilMode mode) {
+    if ((unsigned)mode > NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL) die("invalid NVN texture depth-stencil mode");
+    TB(b)->d.dsmode = (unsigned)mode;
+}
 NVN(nvnTextureBuilderSetSwizzle, void, NVNtextureBuilder *b,NVNtextureSwizzle r,NVNtextureSwizzle g,NVNtextureSwizzle blue,NVNtextureSwizzle a){if((unsigned)r>5||(unsigned)g>5||(unsigned)blue>5||(unsigned)a>5)die("invalid NVN texture swizzle");TB(b)->d.swizzle_r=r;TB(b)->d.swizzle_g=g;TB(b)->d.swizzle_b=blue;TB(b)->d.swizzle_a=a;}
 NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
 NVN(nvnTextureBuilderSetStride, void, NVNtextureBuilder *b, ptrdiff_t s) { TB(b)->d.stride = (uint32_t)s; }
@@ -821,6 +830,14 @@ NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     if (ok) survey_after_wait(s);
     return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }
+/* All queues replay sequentially through the single host queue and WindowAcquireTexture synchronizes
+   host-side before returning, so GPU execution ordering is already satisfied at submission time. */
+NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) {
+    const queue_t *qo = (const queue_t *)q;
+    const sync_t *so = (const sync_t *)s;
+    if (!qo || qo->magic != MAGIC('Q', 'U', 'E', 'U') || !so || so->magic != MAGIC('S', 'Y', 'N', 'C')) return 0;
+    return 1;
+}
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }
 NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
@@ -1052,10 +1069,16 @@ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) {
    BindVertexAttribState 1+n words, BindVertexStreamState 16+n words, BindVertexBuffer 6 words each (address + limit). */
 static void hw_fix(cmd_t *o, size_t bytes) { o->hw_used += bytes; o->hw_used -= o->last_rec; o->last_rec = bytes; }
 static int reclog_limit(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_RECLOG"); v = e ? atoi(e) : 0; } return v; }
+static _Atomic int g_totk_wid_active;
+static __thread uint8_t t_totk_cur_wid;
+void totk_nvn_enable_wid(void) { atomic_store_explicit(&g_totk_wid_active, 1, memory_order_release); }
+void totk_nvn_set_wid(uint8_t w) { t_totk_cur_wid = w; }
+uint8_t totk_nvn_cur_wid(void) { return t_totk_cur_wid; }
 NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     cmd_t *o = CB(c);
     if (o->recording) { LOG("【红】BeginRecording 重入"); seg_release_calls(o); }
     o->recording = 1; o->cur = o->seg;   /* the previous recording was copied at EndRecording */
+    o->last_wid = 0xffu;
 #ifdef GAME_BOTW
     cb_seen_set(o);
 #endif
@@ -1100,10 +1123,12 @@ static pthread_mutex_t g_copy_mu = PTHREAD_MUTEX_INITIALIZER;
    TOTK_NVN_CALL_NOCOPY marker still names it (dropped once that recording's EndRecording copied the body, or the
    recording was abandoned). The memory goes with the last reference; the handle itself dies at its release as before. */
 #ifdef GAME_BOTW
-typedef struct { uint64_t magic; _Atomic uint64_t used_at; uint64_t made_at; uint32_t body_bytes, last_size; _Atomic uint32_t used; _Atomic uint32_t refs; } copy_prefix;   // used: called or submitted at least once (NVN 53 lifetime, release_copies)
+typedef struct { uint64_t magic; _Atomic uint64_t used_at; uint64_t made_at; uint32_t body_bytes, last_size; uint32_t def_lo, def_hi; uint32_t pin_lo, pin_hi; _Atomic uint32_t used; _Atomic uint32_t refs; } copy_prefix;   // used: called or submitted at least once (NVN 53 lifetime, release_copies)
 #else
-typedef struct { uint64_t magic; _Atomic uint64_t used_at; uint64_t made_at; uint32_t body_bytes, last_size; _Atomic uint32_t refs; uint32_t pad_; } copy_prefix;
+typedef struct { uint64_t magic; _Atomic uint64_t used_at; uint64_t made_at; uint32_t body_bytes, last_size; uint32_t def_lo, def_hi; uint32_t pin_lo, pin_hi; _Atomic uint32_t refs; uint32_t pad_; } copy_prefix;
 #endif
+_Static_assert((sizeof(copy_prefix) & 7u) == 0u, "copy_prefix keeps 8-byte alignment");
+static totk_ctl_copy_summary g_ctl_copy_sum = {.min_lo = UINTPTR_MAX};
 static _Atomic uint64_t g_copy_bytes;   /* live recording-copy bytes (logged with the copy count) */
 static copy_prefix *copy_of(NVNcommandHandle h) { copy_prefix *c = (copy_prefix *)(uintptr_t)h - 1; return c; }
 static void copy_unref(copy_prefix *pf) {   /* any thread, no lock: the last reference frees the memory */
@@ -1141,19 +1166,33 @@ static _Atomic uint64_t g_call_markers, g_call_marker_bytes;   /* calls recorded
    jumps with one memcpy. The old doubling realloc re-copied the recording at every growth and again when trimming
    (realloc memcpy on the game's main thread, plus fresh-page faults for the large frame recordings). A
    TOTK_NVN_CALL_NOCOPY marker counts as its called body, which is copied in its place (and its reference dropped). */
+static inline void flatten_note_def(totk_def_span *ds, size_t rec_off, const uint8_t *p, op_hdr h) {
+    if (h.op == OP_CALL) { totk_def_span_note_op(ds, rec_off, h.size); return; }
+    if ((h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) && h.size >= 32u) {
+        const p_bind_handles *bh = (const p_bind_handles *)(p + 8);
+        if (bh->src && bh->n > 0 && bh->n <= 32) totk_def_span_note_op(ds, rec_off, h.size);
+    }
+}
+static inline void flatten_note_pin(totk_pin_span *ps, size_t rec_off, op_hdr h) {
+    if (h.op == OP_SET_RT || h.op == OP_COPY_B2T || h.op == OP_COPY_T2B || h.op == OP_CLEAR_TEX || h.op == OP_COPY_T2T) {
+        totk_pin_span_note_op(ps, rec_off, h.size);
+    }
+}
 static uint8_t *flatten_recording(const uint8_t *p0) {
     size_t n = sizeof(copy_prefix);
     int bulk_ok = 1, jumped = 0, called = 0; uint32_t last_size = 0, end_size = 0;
+    totk_def_span ds; totk_def_span_init(&ds);
+    totk_pin_span ps; totk_pin_span_init(&ps);
     for (const uint8_t *p = p0;;) {
         op_hdr h; memcpy(&h, p, sizeof h);
         if (h.size < 8 || (h.size & 7)) die("corrupt recording at %p (op %u size %u)", (const void *)p, h.op, h.size);
         if (h.op == OP_JUMP) { memcpy(&p, p + 8, 8); jumped = 1; continue; }
         const copy_prefix *t = call_marker_target(p, h);
-        if (t) { n += t->body_bytes; last_size = t->last_size; called = 1; p += h.size; continue; }   /* checked bulk records */
+        if (t) { totk_def_span_note_marker(&ds, n - sizeof(copy_prefix), t->def_lo, t->def_hi); totk_pin_span_note_marker(&ps, n - sizeof(copy_prefix), t->pin_lo, t->pin_hi); n += t->body_bytes; last_size = t->last_size; called = 1; p += h.size; continue; }   /* checked bulk records */
         if (h.op >= OP_COUNT_ || h.size > (64u << 20)) bulk_ok = 0;
         if (n == sizeof(copy_prefix)) { if (h.op != OP_BEGIN || h.size != 8) bulk_ok = 0; }
         else if (h.op == OP_BEGIN) bulk_ok = 0;
-        else if (h.op != OP_END) last_size = h.size;
+        else if (h.op != OP_END) { last_size = h.size; flatten_note_def(&ds, n - sizeof(copy_prefix), p, h); flatten_note_pin(&ps, n - sizeof(copy_prefix), h); }
         n += h.size;
         if (h.op == OP_END) { end_size = h.size; break; }
         p += h.size;
@@ -1186,6 +1225,8 @@ static uint8_t *flatten_recording(const uint8_t *p0) {
     size_t body = n >= sizeof(copy_prefix) + 16 ? n - sizeof(copy_prefix) - 16 : 0;
     c->body_bytes = bulk_ok && end_size == 8 && body <= UINT32_MAX ? (uint32_t)body : 0;
     c->last_size = c->body_bytes ? last_size : 0;
+    c->def_lo = ds.lo; c->def_hi = ds.hi;
+    c->pin_lo = ps.lo; c->pin_hi = ps.hi;
     g_copy_bytes += malloc_size(out); return out + sizeof(copy_prefix);
 }
 /* Track handle use for diagnostics; lifetime depends on control-memory reuse, never elapsed frames. */
@@ -1211,12 +1252,15 @@ static void copy_drop(copy_bucket *b, uint32_t i, int by_token) {   /* g_copy_mu
     copy_prefix *pf = (copy_prefix *)(c->copy - sizeof(copy_prefix));
     if (cmdlog_env()) LOG("[cmd] free copy=%p%s", (void *)c->copy, by_token ? " (its mark in the control memory is gone)" : "");
     g_freed[g_nfreed++ % FREED_RING] = (typeof(g_freed[0])){(uintptr_t)c->copy, g_submits, c->stale_at, pf->used_at, pf->made_at, c->ctl_lo};
+    uintptr_t drop_lo = c->ctl_lo, drop_hi = c->ctl_hi;
     pf->magic = 0; copy_unref(pf); b->v[i] = b->v[--b->n]; g_ncopies--;   /* a recording's call marker may keep the memory a while */
+    totk_ctl_copy_note_drop(&g_ctl_copy_sum, drop_lo, drop_hi);
     if (by_token) g_copy_drop_token++; else g_copy_drop_readd++;
     if (!b->n && !b->empty) { b->empty = 1; g_cbk_empty++; }
 }
 static void release_copies(uintptr_t lo, uintptr_t hi) {
     if (hi <= lo) return;
+    if (totk_nvn_hle_fast_on() && !totk_ctl_copy_may_overlap(&g_ctl_copy_sum, lo, hi)) return;
     pthread_mutex_lock(&g_copy_mu);
     for (uintptr_t pg = lo >> COPY_PAGE_SHIFT; pg <= (hi - 1) >> COPY_PAGE_SHIFT; pg++) {
         copy_bucket *b = cbk_get(pg, 0); if (!b) continue;
@@ -1311,7 +1355,7 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
 #endif
       if (b->empty) { b->empty = 0; g_cbk_empty--; }
       if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->v = realloc(b->v, b->cap * sizeof *b->v); if (!b->v) die("command copy table"); }
-      b->v[b->n++] = (cmd_copy){lo, hi, copy, 0, (uint32_t)token}; g_ncopies++; }
+      b->v[b->n++] = (cmd_copy){lo, hi, copy, 0, (uint32_t)token}; g_ncopies++; totk_ctl_copy_note_add(&g_ctl_copy_sum, lo, hi); }
     { static uint64_t made; if (++made % 20000 == 0)
         LOG("[cmd] recording copies: %llu made, %zu live, %.1f MiB, submit %llu; released %llu at a re-added control memory, %llu whose mark there was gone (%llu unmapped); index %zu buckets (%zu empty) of %zu, compacted %llu times; TOTK_NVN_CALL_NOCOPY markers %llu, %.1f MiB not copied at the call",
             (unsigned long long)made, g_ncopies, g_copy_bytes / 1048576.0, (unsigned long long)g_submits, (unsigned long long)g_copy_drop_readd, (unsigned long long)g_copy_drop_token, (unsigned long long)g_copy_mark_faults,
@@ -1358,7 +1402,7 @@ static int call_stats_on(void) { static int v = -1; if (v < 0) v = getenv("TOTK_
 #define CS_TAB 16384
 static struct { const void *cb; uint64_t inl; } g_cs_inl[CS_TAB];
 static struct { uint64_t handle, own; } g_cs_own[CS_TAB];
-static uint64_t list_draws(const uint8_t *q) { uint64_t d = 0; for (;;) { op_hdr x; memcpy(&x, q, sizeof x); if (x.op == OP_END || x.size < 8) break; if (x.op == OP_DRAW || x.op == OP_DRAW_IDX) d++; q += x.size; } return d; }
+static uint64_t list_draws(const uint8_t *q) { uint64_t d = 0; for (;;) { op_hdr x; memcpy(&x, q, sizeof x); if (x.op == OP_END || x.size < 8) break; if (x.op == OP_DRAW || x.op == OP_DRAW_IDX || x.op == OP_DRAW_INDIRECT || x.op == OP_DRAW_IDX_INDIRECT) d++; q += x.size; } return d; }
 static void call_stats_end(const void *cb, const uint8_t *copy) {
     unsigned i = (unsigned)(((uintptr_t)cb >> 4) % CS_TAB); uint64_t inl = g_cs_inl[i].cb == cb ? g_cs_inl[i].inl : 0; g_cs_inl[i].cb = NULL; g_cs_inl[i].inl = 0;
     uint64_t all = list_draws(copy); unsigned j = (unsigned)(((uintptr_t)copy >> 4) % CS_TAB);
@@ -1367,7 +1411,7 @@ static void call_stats_end(const void *cb, const uint8_t *copy) {
 static void call_stats_note(const void *cb, uint64_t hd, const uint8_t *p) {
     uint64_t h = 1469598103934665603ull, draws = 0, alld = 0, bytes = 0;
     for (const uint8_t *q = p;;) { op_hdr x; memcpy(&x, q, sizeof x); if (x.op == OP_END || x.size < 8) break;
-        if (x.op == OP_DRAW || x.op == OP_DRAW_IDX) alld++;
+        if (x.op == OP_DRAW || x.op == OP_DRAW_IDX || x.op == OP_DRAW_INDIRECT || x.op == OP_DRAW_IDX_INDIRECT) alld++;
         for (uint32_t i = 0; i < x.size; i += 8) { uint64_t w; memcpy(&w, q + i, 8); h = (h ^ w) * 1099511628211ull; }
         bytes += x.size; q += x.size; }
     { unsigned j = (unsigned)((hd >> 4) % CS_TAB); draws = g_cs_own[j].handle == hd ? g_cs_own[j].own : alld; }
@@ -1464,6 +1508,7 @@ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcom
 #else
     for (int i = 0; i < n; i++) inline_recording(c, h[i]);
 #endif
+    CB(c)->last_wid = 0xffu;
 }
 NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcommandHandle *h) {
     if (cmdlog_env()) for (int i = 0; i < n; i++) LOG("[cmd] CallCommands cb=%p handle=%#llx", (void *)c, (unsigned long long)h[i]);
@@ -1473,6 +1518,7 @@ NVN(nvnCommandBufferCallCommands, void, NVNcommandBuffer *c, int n, const NVNcom
 #else
     for (int i = 0; i < n; i++) inline_recording(c, h[i]);
 #endif
+    CB(c)->last_wid = 0xffu;
 }
 NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
     (void)loc; (void)flags;
@@ -1520,6 +1566,15 @@ static void *rec(NVNcommandBuffer *c, uint32_t op, size_t payload) {
     return p + 8;
 }
 #define REC(c, OP, T) ((T *)rec((c), (OP), sizeof(T)))
+static inline void rec_ui_tag(NVNcommandBuffer *c) {
+    if (!atomic_load_explicit(&g_totk_wid_active, memory_order_relaxed)) return;
+    cmd_t *o = CB(c); uint8_t w = t_totk_cur_wid;
+    if (o->last_wid == w) return;
+    o->last_wid = w;
+    *REC(c, OP_UI_TAG, p_ui_tag) = (p_ui_tag){w, 0u};
+    hw_fix(o, 0);
+}
+
 // 带数组的绑定记录按实际个数分配：前缀字段 + n 个元素（回放端只读前 n 个）。原先按最大个数定长记（绑顶点缓冲 272 字节、绑贴图 / 采样器 280 字节，
 // 实际常只有 1–2 个），空尾占每帧命令字节的四到五成；88 级法师的高级属性页每帧录 12.5 MB，把游戏自己的命令内存池（约每帧 105 段 × 128 KB）用空
 // Binding records with arrays are allocated by the actual count: prefix fields + n elements (the replay side reads only the first n). Previously they were recorded at fixed length for the maximum count (bind vertex buffers 272 bytes, bind textures / samplers 280 bytes,
@@ -1549,6 +1604,8 @@ static pthread_mutex_t g_pin_mu = PTHREAD_MUTEX_INITIALIZER;   /* lock order: g_
 static pin_t **g_pin_tab; static size_t g_pin_cap, g_pin_n;
 static pin_set g_pin_ptrs;
 static uint64_t g_pin_sweep_id = 1, g_pin_freed, g_pin_marks;
+static totk_pin_sync g_pin_sync = {.epoch = 1u};
+static __thread totk_pin_memo4 *t_pin_memo;
 static size_t pin_slot(uint64_t serial, size_t cap) { return (size_t)((serial * 0x9E3779B97F4A7C15ull) & (cap - 1)); }
 static size_t ptr_slot(const void *p, size_t cap) { return (size_t)((((uintptr_t)p >> 4) * 0x9E3779B97F4A7C15ull) >> 16) & (cap - 1); }
 static void ptrs_put(pin_set *s, pin_t *p) { size_t j = ptr_slot(p, s->cap); while (s->v[j]) j = (j + 1) & (s->cap - 1); s->v[j] = p; s->n++; }
@@ -1566,6 +1623,14 @@ static const tex_t *tex_pin(const NVNtexture *nt) {
     const tex_t *t = (const tex_t *)nt;
     if (!t) return NULL;
     if (!t->serial) die("recording references an uninitialized texture object %p", (const void *)t);
+    uint64_t cur_sub = __atomic_load_n(&g_submits, __ATOMIC_RELAXED);
+    int fast = totk_nvn_hle_fast_on();
+    if (fast) {
+        const tex_t *fr = (const tex_t *)totk_pin_fast_get(&t_pin_memo, &g_pin_sync, t->serial, cur_sub);
+        if (fr) return fr;
+    }
+    uint32_t w0 = 0; uint64_t e0 = 0;
+    if (fast) totk_pin_snap(&g_pin_sync, &w0, &e0);
     pthread_mutex_lock(&g_pin_mu);
     if ((g_pin_n + 1) * 2 > g_pin_cap) pin_rebuild(g_pin_cap ? g_pin_cap * 2 : 4096);
     size_t j = pin_slot(t->serial, g_pin_cap);
@@ -1574,10 +1639,13 @@ static const tex_t *tex_pin(const NVNtexture *nt) {
         pin_t *c = malloc(sizeof *c); if (!c) die("texture pin copy");
         c->t = *t; c->alive_sweep = g_pin_sweep_id; g_pin_tab[j] = c; g_pin_n++;
         ptrs_put(&g_pin_ptrs, c);   /* same capacity as the serial table, so it has room */
+        totk_pin_sync_note_insert(&g_pin_sync, t->serial, g_pin_n);
     }
-    g_pin_tab[j]->last_pin = __atomic_load_n(&g_submits, __ATOMIC_RELAXED);
+    g_pin_tab[j]->last_pin = cur_sub;
+    g_pin_tab[j]->alive_sweep = g_pin_sweep_id;
     const tex_t *r = &g_pin_tab[j]->t;
     pthread_mutex_unlock(&g_pin_mu);
+    if (fast) totk_pin_fast_put(&t_pin_memo, &g_pin_sync, w0, e0, t->serial, r, cur_sub);
     return r;
 }
 static void pin_mark(const void *p) {   /* g_pin_mu held */
@@ -1603,6 +1671,32 @@ static void pin_mark_ops(const uint8_t *p) {   /* one recording copy: OP_BEGIN .
         p += h.size;
     }
 }
+static void pin_mark_ops_range(const uint8_t *p, const uint8_t *end) {
+    while (p + sizeof(op_hdr) <= end) {
+        op_hdr h; memcpy(&h, p, sizeof h);
+        if (h.op == OP_END || h.size < 8 || (size_t)(end - p) < h.size) return;
+        const uint8_t *a = p + 8;
+        switch (h.op) {
+            case OP_SET_RT: { if (pin_negative()) break;
+                              const p_set_rt *r = (const void *)a; int n = r->n < 0 ? 0 : r->n > 8 ? 8 : r->n;
+                              for (int i = 0; i < n; i++) pin_mark(r->color[i]); pin_mark(r->depth); break; }
+            case OP_COPY_B2T: case OP_COPY_T2B: pin_mark(((const p_copy_b2t *)(const void *)a)->tex); break;
+            case OP_CLEAR_TEX: pin_mark(((const p_clear_tex *)(const void *)a)->tex); break;
+            case OP_COPY_T2T: { const p_copy_t2t *c = (const void *)a; pin_mark(c->src); pin_mark(c->dst); break; }
+            default: break;
+        }
+        p += h.size;
+    }
+}
+static void pin_mark_ops_copy(const uint8_t *copy) {
+    if (!totk_nvn_hle_fast_on()) { pin_mark_ops(copy); return; }
+    const copy_prefix *pf = (const copy_prefix *)(const void *)copy - 1;
+    uint32_t lo = 0, hi = 0;
+    int kind = totk_pin_span_slice(pf->pin_lo, pf->pin_hi, &lo, &hi);
+    if (kind == 0) return;
+    if (kind == 2) { pin_mark_ops(copy); return; }
+    pin_mark_ops_range(copy + lo, copy + hi);
+}
 void mtl_pin_refs(void (*mark)(const void *));   /* nvn_mtl.m: the replay state that outlives a submit */
 static int pin_sweep_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("TOTK_PIN_SWEEP"); v = !(e && !strcmp(e, "0")); if (!v) LOG("[nvn] TOTK_PIN_SWEEP=0：录制里的贴图副本一直保留（旧行为，长局内存会涨）"); } return v; }
 /* One window: the copy buckets are walked in slices (pin_scan), then pin_decide frees what no recording, no replay state
@@ -1625,7 +1719,7 @@ static void pin_scan(size_t buckets) {   /* g_copy_mu and g_pin_mu held */
         copy_bucket *b = &g_cbk[k]; if (!b->used) continue;
         while (i < b->n) {
             if (b->v[i].token && !copy_token_intact(&b->v[i])) { copy_drop(b, i, 1); continue; }   /* its control memory was reused: the copy goes */
-            pin_mark_ops(b->v[i].copy); g_pin_scanned++; i++;
+            pin_mark_ops_copy(b->v[i].copy); g_pin_scanned++; i++;
         }
     }
     g_mark_jb = NULL;
@@ -1665,17 +1759,24 @@ int dm_nvn_pin_rekey(const tex_t *copy, const tex_t *live) {
     size_t j = 0; int found = 0;
     if (g_pin_cap) for (j = pin_slot(copy->serial, g_pin_cap); g_pin_tab[j]; j = (j + 1) & (g_pin_cap - 1)) if (&g_pin_tab[j]->t == copy) { found = 1; break; }
     if (found) {
+        totk_pin_wbegin(&g_pin_sync);
         pin_t *p = g_pin_tab[j];
         probe_delete(g_pin_tab, g_pin_cap, j, home_serial);
         p->t = *live;
         for (j = pin_slot(p->t.serial, g_pin_cap); g_pin_tab[j]; j = (j + 1) & (g_pin_cap - 1)) {}
         g_pin_tab[j] = p;
+        totk_pin_sync_note_insert(&g_pin_sync, p->t.serial, g_pin_n);
+        totk_pin_wend(&g_pin_sync);
     }
     pthread_mutex_unlock(&g_pin_mu);
     return found;
 }
 #endif
 int dm_nvn_pin_has_serial(uint64_t serial) {   /* nvn_mtl.m (texture finalize): a recording may still bring this serial to the replay */
+    if (totk_nvn_hle_fast_on()) {
+        int fast_has = totk_pin_serial_may_exist(&g_pin_sync, serial, t_pin_memo);
+        if (fast_has >= 0) return fast_has;
+    }
     pthread_mutex_lock(&g_pin_mu);
     int has = 0;
     if (g_pin_cap) for (size_t j = pin_slot(serial, g_pin_cap); g_pin_tab[j]; j = (j + 1) & (g_pin_cap - 1)) if (g_pin_tab[j]->t.serial == serial) { has = 1; break; }
@@ -1684,6 +1785,7 @@ int dm_nvn_pin_has_serial(uint64_t serial) {   /* nvn_mtl.m (texture finalize): 
 }
 static size_t home_ptr(const pin_t *p, size_t cap) { return ptr_slot(p, cap); }
 static size_t pin_decide(uint64_t now, size_t *recent_out) {   /* g_pin_mu held; the window's walk is complete */
+    totk_pin_wbegin(&g_pin_sync);
     mtl_pin_refs(pin_mark);
     size_t recent = 0, nf = 0;
     static pin_t **gone; static size_t gone_cap;
@@ -1705,6 +1807,14 @@ static size_t pin_decide(uint64_t now, size_t *recent_out) {   /* g_pin_mu held;
         g_pin_gone[g_pin_gone_n++] = p->t.serial;
         g_pin_ptrs.n--; g_pin_n--; free(p);
     }
+    if (nf > 0u) {
+        uint64_t sb[4] = {0, 0, 0, 0};
+        for (size_t i = 0; i < g_pin_cap; i++) {
+            if (g_pin_tab[i]) { uint32_t b = totk_pin_bloom_bit(g_pin_tab[i]->t.serial); sb[b >> 6] |= 1ull << (b & 63u); }
+        }
+        totk_pin_sync_set_bloom(&g_pin_sync, sb, g_pin_n);
+    }
+    totk_pin_wend(&g_pin_sync);
     g_pin_freed += nf; g_pin_sweep_id++; *recent_out = recent;
     return nf;
 }
@@ -2048,17 +2158,26 @@ NVN(nvnCommandBufferBindVertexBuffers, void, NVNcommandBuffer *c, int first, int
     if (n < 0 || first + n > 16) { LOG("【红】BindVertexBuffers first=%d n=%d", first, n); return; }
     p_bind_vbuf *r = RECN(c, OP_BIND_VBUF, p_bind_vbuf, r, n); r->first = first; r->n = n; memcpy(r->r, rg, sizeof *rg * n); hw_fix(CB(c), 24 * (size_t)n);
 }
+static inline void bind_buf_emit(NVNcommandBuffer *c, uint32_t op, int32_t st, int32_t idx, uint64_t a, size_t n) {
+    if (totk_nvn_sub_fast_on()) {
+        totk_pack_bind_buf_rec(cmd_alloc(CB(c), 32u), op, st, idx, a, (uint64_t)n);
+        if (cs_on()) cs_op(op, 32u);
+        hw_fix(CB(c), 20);
+        return;
+    }
+    *REC(c, op, p_bind_buf) = (p_bind_buf){st, idx, a, n}; hw_fix(CB(c), 20);
+}
 NVN(nvnCommandBufferBindUniformBuffer, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNbufferAddress a, size_t n) {
-    *REC(c, OP_BIND_UBO, p_bind_buf) = (p_bind_buf){st, i, a, n}; hw_fix(CB(c), 20);   /* CB_SIZE/ADDRESS (4 words) + CB_BIND (1) */
+    bind_buf_emit(c, OP_BIND_UBO, st, i, a, n);   /* CB_SIZE/ADDRESS (4 words) + CB_BIND (1) */
 }
 NVN(nvnCommandBufferBindUniformBuffers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *rg) {
-    for (int i = 0; i < n; i++) { *REC(c, OP_BIND_UBO, p_bind_buf) = (p_bind_buf){st, first + i, rg[i].address, rg[i].size}; hw_fix(CB(c), 20); }
+    for (int i = 0; i < n; i++) bind_buf_emit(c, OP_BIND_UBO, st, first + i, rg[i].address, rg[i].size);
 }
 NVN(nvnCommandBufferBindStorageBuffer, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNbufferAddress a, size_t n) {
-    *REC(c, OP_BIND_SSBO, p_bind_buf) = (p_bind_buf){st, i, a, n}; hw_fix(CB(c), 20);   /* macro 16 (1 word) + CB_DATA address/size (4) */
+    bind_buf_emit(c, OP_BIND_SSBO, st, i, a, n);   /* macro 16 (1 word) + CB_DATA address/size (4) */
 }
 NVN(nvnCommandBufferBindStorageBuffers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *rg) {
-    for (int i = 0; i < n; i++) { *REC(c, OP_BIND_SSBO, p_bind_buf) = (p_bind_buf){st, first + i, rg[i].address, rg[i].size}; hw_fix(CB(c), 20); }
+    for (int i = 0; i < n; i++) bind_buf_emit(c, OP_BIND_SSBO, st, first + i, rg[i].address, rg[i].size);
 }
 /* DM_NVN_LIFELOG (totk_lifelog.h): one bound handle of a followed texture; for a deferred bind the logged id is the
    value at record time, the replay's "use" lines show the one resolved at submit. */
@@ -2103,6 +2222,16 @@ void nvn_bind_handles_deferred(NVNcommandBuffer *c, int op, int st, int first, i
 static _Atomic int g_def_on = -1;                   // TOTK_DEFERRED_BINDS=0 / runtime flag "deferred 0": keep the record-time handles (A/B)
 static uint64_t g_def_n, g_def_changed, g_def_logged, g_def_ns;
 void nvn_set_deferred_binds(int on) { atomic_store(&g_def_on, on); LOG("[flag] deferred = %d", on); }
+static void resolve_deferred_bind_op(const uint8_t *p) {
+    p_bind_handles *b = (p_bind_handles *)(uintptr_t)(p + 8);
+    if (b->src && b->n > 0 && b->n <= 32) {
+        uint64_t cur[32]; memcpy(cur, (const void *)(uintptr_t)b->src, 8 * (size_t)b->n); g_def_n++;
+        if (memcmp(cur, b->h, 8 * (size_t)b->n)) {
+            if (g_def_logged++ < 6) LOG("[nvn] 延迟绑定在提交时读到新句柄：阶段 %d 槽 %d 起，录制时 %#llx → 提交时 %#llx", b->stage, b->first, (unsigned long long)b->h[0], (unsigned long long)cur[0]);
+            g_def_changed++; memcpy(b->h, cur, 8 * (size_t)b->n);
+        }
+    }
+}
 static void resolve_deferred(const uint8_t *p, int depth) {   // read the handles of every deferred bind in a submitted recording
     for (;;) {
         op_hdr h; memcpy(&h, p, sizeof h);
@@ -2110,18 +2239,28 @@ static void resolve_deferred(const uint8_t *p, int depth) {   // read the handle
         if (h.op == OP_END) return;
         if (h.op == OP_JUMP) { memcpy(&p, p + 8, 8); continue; }
         if (h.op == OP_CALL) { uint64_t t; memcpy(&t, p + 8, 8); if (depth >= 16) die("deferred bind resolution: call depth over 16"); resolve_deferred((const uint8_t *)(uintptr_t)t, depth + 1); }
-        else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) {
-            p_bind_handles *b = (p_bind_handles *)(uintptr_t)(p + 8);
-            if (b->src && b->n > 0 && b->n <= 32) {
-                uint64_t cur[32]; memcpy(cur, (const void *)(uintptr_t)b->src, 8 * (size_t)b->n); g_def_n++;
-                if (memcmp(cur, b->h, 8 * (size_t)b->n)) {
-                    if (g_def_logged++ < 6) LOG("[nvn] 延迟绑定在提交时读到新句柄：阶段 %d 槽 %d 起，录制时 %#llx → 提交时 %#llx", b->stage, b->first, (unsigned long long)b->h[0], (unsigned long long)cur[0]);
-                    g_def_changed++; memcpy(b->h, cur, 8 * (size_t)b->n);
-                }
-            }
-        }
+        else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) resolve_deferred_bind_op(p);
         p += h.size;
     }
+}
+static void resolve_deferred_slice(const uint8_t *p, const uint8_t *end) {
+    while (p < end) {
+        op_hdr h; memcpy(&h, p, sizeof h);
+        if (h.size < 8 || (h.size & 7) || h.op >= OP_COUNT_) die("corrupt recording at %p while resolving deferred binds (op %u size %u)", (const void *)p, h.op, h.size);
+        if (h.op == OP_END) return;
+        if (h.op == OP_JUMP) { memcpy(&p, p + 8, 8); continue; }
+        if (h.op == OP_CALL) { uint64_t t; memcpy(&t, p + 8, 8); resolve_deferred((const uint8_t *)(uintptr_t)t, 1); }
+        else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) resolve_deferred_bind_op(p);
+        p += h.size;
+    }
+}
+static void resolve_deferred_copy(const uint8_t *copy, uint32_t def_lo, uint32_t def_hi) {
+    if (!totk_nvn_sub_fast_on()) { resolve_deferred(copy, 0); return; }
+    uint32_t lo = 0, hi = 0;
+    int kind = totk_def_span_slice(def_lo, def_hi, &lo, &hi);
+    if (kind == 0) return;
+    if (kind == 1) resolve_deferred_slice(copy + lo, copy + hi);
+    else resolve_deferred(copy, 0);
 }
 // 图像（可写贴图）：句柄 = 贴图池号（GetImageHandle 原样返回；游戏不调 RegisterImage，图像与贴图共用登记）
 // Image (writable texture): handle = texture pool index (GetImageHandle returns it as-is; the game does not call RegisterImage, images and textures share registration)
@@ -2195,20 +2334,32 @@ NVN(nvnCommandBufferSetStencilRef, void, NVNcommandBuffer *c, NVNface f, int v) 
 NVN(nvnCommandBufferSetPolygonOffsetClamp, void, NVNcommandBuffer *c, float fa, float un, float cl) {
     *REC(c, OP_POLY_OFFSET, p_poly_offset) = (p_poly_offset){fa, un, cl};
 }
-NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n, 0, 1}; }
+NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { rec_ui_tag(c); *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n, 0, 1}; }
 NVN(nvnCommandBufferDrawArraysInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n, int bi, int inst) {
     if (inst <= 0) return;   // NVN: zero instances draw nothing
+    rec_ui_tag(c);
     *REC(c, OP_DRAW, p_draw) = (p_draw){pr, first, n, bi, inst};
 }
 NVN(nvnCommandBufferDrawElements, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib) {
+    rec_ui_tag(c);
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, 0, 0, 1, ib}; hw_fix(CB(c), 48);
 }
 NVN(nvnCommandBufferDrawElementsBaseVertex, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib, int bv) {
+    rec_ui_tag(c);
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, 0, 1, ib}; hw_fix(CB(c), 44);
 }
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {
+    rec_ui_tag(c);
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, bi, inst, ib}; hw_fix(CB(c), 44);   /* assumed: same 6-parameter draw macro as the base-vertex form (unverified) */
+}
+NVN(nvnCommandBufferDrawArraysIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress buf) {
+    rec_ui_tag(c);
+    *REC(c, OP_DRAW_INDIRECT, p_draw_indirect) = (p_draw_indirect){pr, buf}; hw_fix(CB(c), 24);
+}
+NVN(nvnCommandBufferDrawElementsIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, NVNbufferAddress ib, NVNbufferAddress buf) {
+    rec_ui_tag(c);
+    *REC(c, OP_DRAW_IDX_INDIRECT, p_draw_idx_indirect) = (p_draw_idx_indirect){pr, it, ib, buf}; hw_fix(CB(c), 32);
 }
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) {
     // 跳板是尾跳（br），这里的返回地址就是游戏里的调用点
@@ -2221,10 +2372,10 @@ NVN(nvnCommandBufferSetSamplerPool, void, NVNcommandBuffer *c, const NVNsamplerP
 
 // Recording-time local stride, including called lists already flattened by inline_recording.
 // A list without an explicit stride can inherit replay state; replay logs that authoritative value.
-static ptrdiff_t texcopy_recorded_row(const NVNcommandBuffer *c, int *known) {
+static ptrdiff_t recorded_copy_stride(const NVNcommandBuffer *c, uint32_t want_op, int *known) {
     const cmd_t *b = (const cmd_t *)c;
-    ptrdiff_t row = 0; *known = 0;
-    if (!b->seg) return row;
+    ptrdiff_t val = 0; *known = 0;
+    if (!b || !b->seg) return val;
     for (const uint8_t *p = b->seg; p < b->cur; ) {
         size_t left = (size_t)(b->cur - p);
         if (left < sizeof(op_hdr)) { *known = -1; break; }
@@ -2235,25 +2386,26 @@ static ptrdiff_t texcopy_recorded_row(const NVNcommandBuffer *c, int *known) {
             const uint8_t *q = (const uint8_t *)(t + 1) + 8, *e = q + t->body_bytes;
             for (op_hdr g; q < e; q += g.size) {
                 memcpy(&g, q, sizeof g);
-                if (g.op == OP_COPY_STRIDE && g.size >= 8 + sizeof(p_copy_stride)) {
-                    p_copy_stride s; memcpy(&s, q + 8, sizeof s); row = (ptrdiff_t)s.stride; *known = 1;
+                if (g.size < 8 || (g.size & 7) || (size_t)(e - q) < g.size) { *known = -1; break; }
+                if (g.op == want_op && g.size >= 8 + sizeof(p_copy_stride)) {
+                    p_copy_stride s; memcpy(&s, q + 8, sizeof s); val = (ptrdiff_t)s.stride; *known = 1;
                 }
             }
-        } else if (h.op == OP_COPY_STRIDE && h.size >= 8 + sizeof(p_copy_stride)) {
-            p_copy_stride s; memcpy(&s, p + 8, sizeof s); row = (ptrdiff_t)s.stride; *known = 1;
+        } else if (h.op == want_op && h.size >= 8 + sizeof(p_copy_stride)) {
+            p_copy_stride s; memcpy(&s, p + 8, sizeof s); val = (ptrdiff_t)s.stride; *known = 1;
         }
         p += h.size;
     }
-    return row;
+    return val;
 }
 NVN(nvnCommandBufferCopyBufferToTexture, void, NVNcommandBuffer *c, NVNbufferAddress src, const NVNtexture *t, const NVNtextureView *v,
     const NVNcopyRegion *r, int flags) {
     if (totk_texcopy_on()) {
-        int known; ptrdiff_t row = texcopy_recorded_row(c, &known);
-        totk_texcopy_side source = {.addr = src, .bytes = totk_texcopy_buffer_size(CTX(t), r, row, 0)};
+        int known, iknown; ptrdiff_t row = recorded_copy_stride(c, OP_COPY_STRIDE, &known), img = recorded_copy_stride(c, OP_COPY_IMAGE_STRIDE, &iknown);
+        totk_texcopy_side source = {.addr = src, .bytes = totk_texcopy_buffer_size(CTX(t), r, row, img)};
         totk_texcopy_side destination = {.tex = CTX(t), .view = (const view_t *)v, .region = r};
-        char details[160]; snprintf(details, sizeof details, "flags=%#x row=%lld row_source=%s result=pending-record", flags,
-                                   (long long)row, known > 0 ? "recorded" : known < 0 ? "unavailable" : "default-or-inherited");
+        char details[192]; snprintf(details, sizeof details, "flags=%#x row=%lld row_source=%s img=%lld result=pending-record", flags,
+                                    (long long)row, known > 0 ? "recorded" : known < 0 ? "unavailable" : "default-or-inherited", (long long)img);
         totk_texcopy_frontend("nvnCommandBufferCopyBufferToTexture", "record", totk_texcopy_caller(), c, &source, &destination, details);
     }
     p_copy_b2t *o = REC(c, OP_COPY_B2T, p_copy_b2t); o->src = src; o->tex = tex_pin(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
@@ -2261,11 +2413,11 @@ NVN(nvnCommandBufferCopyBufferToTexture, void, NVNcommandBuffer *c, NVNbufferAdd
 NVN(nvnCommandBufferCopyTextureToBuffer, void, NVNcommandBuffer *c, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r,
     NVNbufferAddress dst, int flags) {
     if (totk_texcopy_on()) {
-        int known; ptrdiff_t row = texcopy_recorded_row(c, &known);
+        int known, iknown; ptrdiff_t row = recorded_copy_stride(c, OP_COPY_STRIDE, &known), img = recorded_copy_stride(c, OP_COPY_IMAGE_STRIDE, &iknown);
         totk_texcopy_side source = {.tex = CTX(t), .view = (const view_t *)v, .region = r};
-        totk_texcopy_side destination = {.addr = dst, .bytes = totk_texcopy_buffer_size(CTX(t), r, row, 0)};
-        char details[160]; snprintf(details, sizeof details, "flags=%#x row=%lld row_source=%s result=pending-record", flags,
-                                   (long long)row, known > 0 ? "recorded" : known < 0 ? "unavailable" : "default-or-inherited");
+        totk_texcopy_side destination = {.addr = dst, .bytes = totk_texcopy_buffer_size(CTX(t), r, row, img)};
+        char details[192]; snprintf(details, sizeof details, "flags=%#x row=%lld row_source=%s img=%lld result=pending-record", flags,
+                                    (long long)row, known > 0 ? "recorded" : known < 0 ? "unavailable" : "default-or-inherited", (long long)img);
         totk_texcopy_frontend("nvnCommandBufferCopyTextureToBuffer", "record", totk_texcopy_caller(), c, &source, &destination, details);
     }
     p_copy_b2t *o = REC(c, OP_COPY_T2B, p_copy_b2t); o->src = dst; o->tex = tex_pin(t); copy_view(&o->view, &o->has_view, v); o->r = *r; o->flags = flags;
@@ -2290,6 +2442,9 @@ NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNte
     copy_view(&o->sv, &o->has_sv, sv); copy_view(&o->dv, &o->has_dv, dv); o->sr = *sr; o->dr = *dr; o->flags = flags;
 }
 NVN(nvnCommandBufferSetCopyRowStride, void, NVNcommandBuffer *c, ptrdiff_t st) { REC(c, OP_COPY_STRIDE, p_copy_stride)->stride = st; }
+NVN(nvnCommandBufferSetCopyImageStride, void, NVNcommandBuffer *c, ptrdiff_t st) { REC(c, OP_COPY_IMAGE_STRIDE, p_copy_stride)->stride = st; }
+NVN(nvnCommandBufferGetCopyRowStride, ptrdiff_t, const NVNcommandBuffer *c) { int known; return recorded_copy_stride(c, OP_COPY_STRIDE, &known); }
+NVN(nvnCommandBufferGetCopyImageStride, ptrdiff_t, const NVNcommandBuffer *c) { int known; return recorded_copy_stride(c, OP_COPY_IMAGE_STRIDE, &known); }
 NVN(nvnCommandBufferSetBlendColor, void, NVNcommandBuffer *c, const float *v) { memcpy(REC(c, OP_BLEND_COLOR, p_blend_color)->rgba, v, 16); }
 NVN(nvnCommandBufferSetAlphaRef, void, NVNcommandBuffer *c, float r) { REC(c, OP_ALPHA_REF, p_alpha_ref)->value = r; }
 
@@ -2539,7 +2694,13 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     if (atomic_load(&g_def_on) < 0) { const char *e = getenv("TOTK_DEFERRED_BINDS"); atomic_store(&g_def_on, !(e && !strcmp(e, "0"))); LOG("[nvn] 延迟绑定：%s", atomic_load(&g_def_on) ? "提交时读句柄" : "录制时读句柄（TOTK_DEFERRED_BINDS=0，旧行为）"); }
     if (atomic_load(&g_def_on)) {
         uint64_t r0 = now_ns();
-        for (int i = 0; i < n; i++) resolve_deferred((const uint8_t *)h[i], 0);
+        static __thread totk_sub_seen4 t_sub_seen; int sub_fast = totk_nvn_sub_fast_on();
+        if (sub_fast) totk_sub_seen4_reset(&t_sub_seen);
+        for (int i = 0; i < n; i++) {
+            if (sub_fast && !totk_sub_seen4_first(&t_sub_seen, (uint64_t)(uintptr_t)h[i])) continue;
+            const copy_prefix *pf = copy_of(h[i]);
+            resolve_deferred_copy((const uint8_t *)h[i], pf->def_lo, pf->def_hi);
+        }
         g_def_ns += now_ns() - r0;
         if (((queue_t *)q)->submits % 600 == 0) LOG("[nvn] 延迟绑定 至提交 %llu：提交时读句柄 %llu 次，其中与录制时不同 %llu 次；每次提交读句柄平均 %.3f ms", (unsigned long long)((queue_t *)q)->submits, (unsigned long long)g_def_n, (unsigned long long)g_def_changed, g_def_ns / 1e6 / (double)((queue_t *)q)->submits);
     }
@@ -2570,7 +2731,7 @@ static void submit_exec(int n, const uint64_t *h, void *ucap, uint64_t guest_ns,
     pin_step(__atomic_load_n(&g_submits, __ATOMIC_RELAXED));   /* TOTK: free texture copies no recording refers to any more */
     if (cmdlog_env()) for (int i = 0; i < n; i++) {
         unsigned ops = 0, draws = 0, calls = 0; const uint8_t *p = (const uint8_t *)h[i];
-        for (;;) { op_hdr hh; memcpy(&hh, p, sizeof hh); ops++; if (hh.op == OP_DRAW || hh.op == OP_DRAW_IDX) draws++; if (hh.op == OP_CALL) calls++; if (hh.op == OP_END || hh.size < 8 || ops > 1000000) break; p += hh.size; }
+        for (;;) { op_hdr hh; memcpy(&hh, p, sizeof hh); ops++; if (hh.op == OP_DRAW || hh.op == OP_DRAW_IDX || hh.op == OP_DRAW_INDIRECT || hh.op == OP_DRAW_IDX_INDIRECT) draws++; if (hh.op == OP_CALL) calls++; if (hh.op == OP_END || hh.size < 8 || ops > 1000000) break; p += hh.size; }
         LOG("[cmd] Submit %d/%d handle=%#llx ops=%u draws=%u calls=%u", i, n, (unsigned long long)h[i], ops, draws, calls); }
     if (getenv("TOTK_CHAIN_LOG")) { static int k; if (k++ < 20) guest_chain("Submit"); }
     uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
@@ -3067,8 +3228,8 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     if (ft_begin) totk_ft_acquire(ft_frame, ft_begin, totk_ft_now());
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
-#ifdef GAME_BOTW
-/* NVN 53 (Breath of the Wild 1.6.0, botw.md): the queue-side acquire. The same wait as nvnWindowAcquireTexture without a
+#if defined(GAME_BOTW) || defined(GAME_HWAOC)
+/* NVN 53 (Breath of the Wild 1.6.0 / Age of Calamity 1.3.0): the queue-side acquire. The same wait as nvnWindowAcquireTexture without a
    sync: it returns once the texture may be drawn into, and every later GPU use of it is ordered after the present copy on
    the one Metal queue. */
 NVN(nvnQueueAcquireTexture, NVNqueueAcquireTextureResult, NVNqueue *q, NVNwindow *w, int *idx) {

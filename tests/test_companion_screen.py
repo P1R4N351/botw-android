@@ -23,11 +23,32 @@ import games  # noqa: E402
 ANDROID_STUBS = {
     'android/content/Context.java': '''package android.content;
 public class Context {
+    public static final int MODE_PRIVATE = 0;
+    public static final String BATTERY_SERVICE = "batterymanager";
     public Context getApplicationContext() { return this; }
     public java.io.File getFilesDir() { return new java.io.File("."); }
+    public java.io.File getExternalFilesDir(String type) { return null; }
+    public SharedPreferences getSharedPreferences(String name, int mode) { return new SharedPreferences(); }
+    public Object getSystemService(String name) { return null; }
     public android.content.res.AssetManager getAssets() { return new android.content.res.AssetManager(); }
     public android.content.pm.PackageManager getPackageManager() { return new android.content.pm.PackageManager(); }
     public String getPackageName() { return "probe"; }
+}''',
+    'android/content/SharedPreferences.java': '''package android.content;
+public class SharedPreferences {
+    public static class Editor {
+        public Editor putBoolean(String k, boolean v) { return this; }
+        public Editor putInt(String k, int v) { return this; }
+        public void apply() { }
+    }
+    public boolean getBoolean(String k, boolean d) { return d; }
+    public int getInt(String k, int d) { return d; }
+    public Editor edit() { return new Editor(); }
+}''',
+    'android/os/BatteryManager.java': '''package android.os;
+public class BatteryManager {
+    public static final int BATTERY_PROPERTY_CAPACITY = 4;
+    public int getIntProperty(int id) { return -1; }
 }''',
     'android/content/pm/PackageInfo.java': 'package android.content.pm; public class PackageInfo { public long lastUpdateTime; public long getLongVersionCode() { return 1; } }',
     'android/content/pm/PackageManager.java': '''package android.content.pm;
@@ -46,16 +67,30 @@ public class AssetManager {
     'android/util/Log.java': 'package android.util; public final class Log { public static int w(String t, String m) { return 0; } public static int w(String t, String m, Throwable e) { return 0; } }',
     'android/os/SystemClock.java': 'package android.os; public final class SystemClock { public static long now = 1_000_000; public static long uptimeMillis() { return now; } }',
     'android/graphics/PixelFormat.java': 'package android.graphics; public class PixelFormat { public static final int RGBA_8888 = 1; }',
-    'android/graphics/Bitmap.java': 'package android.graphics; public class Bitmap { public int getWidth() { return 1; } public int getHeight() { return 1; } }',
+    'android/graphics/Bitmap.java': '''package android.graphics;
+public class Bitmap {
+    public enum Config { ARGB_8888 }
+    public static Bitmap createBitmap(int w, int h, Config c) { return new Bitmap(); }
+    public static Bitmap createScaledBitmap(Bitmap b, int w, int h, boolean f) { return new Bitmap(); }
+    public void recycle() { }
+    public int getWidth() { return 1; } public int getHeight() { return 1; } public boolean isRecycled() { return false; }
+    public void copyPixelsFromBuffer(java.nio.Buffer src) { }
+    public void getPixels(int[] p, int off, int stride, int x, int y, int w, int h) { }
+}''',
     'android/graphics/Color.java': 'package android.graphics; public class Color { public static final int WHITE = -1; }',
     'android/graphics/ColorFilter.java': 'package android.graphics; public class ColorFilter { }',
     'android/graphics/PorterDuff.java': 'package android.graphics; public class PorterDuff { public enum Mode { SRC_IN } }',
     'android/graphics/PorterDuffColorFilter.java': 'package android.graphics; public class PorterDuffColorFilter extends ColorFilter { public PorterDuffColorFilter(int color, PorterDuff.Mode mode) { } }',
-    'android/graphics/Typeface.java': 'package android.graphics; public class Typeface { }',
+    'android/graphics/Shader.java': 'package android.graphics; public class Shader { public enum TileMode { CLAMP, REPEAT, MIRROR } }',
+    'android/graphics/BitmapShader.java': 'package android.graphics; public class BitmapShader extends Shader { public BitmapShader(Bitmap b, TileMode tx, TileMode ty) { } }',
+    'android/graphics/Typeface.java': 'package android.graphics; public class Typeface { public static final int BOLD = 1; public static final Typeface DEFAULT = new Typeface(), DEFAULT_BOLD = new Typeface(), SANS_SERIF = new Typeface(); public static Typeface create(Typeface f, int s) { return f; } }',
     'android/graphics/Path.java': '''package android.graphics;
 public class Path {
+    public enum Direction { CW, CCW }
     public void reset() { } public void moveTo(float x, float y) { } public void cubicTo(float a, float b, float c, float d, float e, float f) { }
     public void lineTo(float x, float y) { } public void close() { }
+    public void addRoundRect(RectF r, float rx, float ry, Direction d) { }
+    public void addCircle(float x, float y, float r, Direction d) { }
 }''',
     'android/graphics/RectF.java': '''package android.graphics;
 public class RectF {
@@ -74,9 +109,9 @@ public class RectF {
     'android/graphics/Paint.java': '''package android.graphics;
 public class Paint {
     public static final int ANTI_ALIAS_FLAG = 1, FILTER_BITMAP_FLAG = 2;
-    public enum Style { FILL, STROKE } public enum Align { LEFT, CENTER } public enum Cap { ROUND, BUTT }
-    public Paint(int flags) { }
-    public void setColor(int c) { } public void setStrokeWidth(float w) { } public void setStyle(Style s) { } public void setTextAlign(Align a) { }
+    public enum Style { FILL, STROKE } public enum Align { LEFT, CENTER, RIGHT } public enum Cap { ROUND, BUTT }
+    public Paint() { } public Paint(int flags) { } public Shader setShader(Shader s) { return s; }
+    public void setColor(int c) { } public void setAlpha(int a) { } public void setStrokeWidth(float w) { } public void setStyle(Style s) { } public void setTextAlign(Align a) { }
     public void setStrokeCap(Cap c) { } public void setTextSize(float s) { } public Typeface setTypeface(Typeface t) { return t; }
     public ColorFilter setColorFilter(ColorFilter f) { return f; }
     public float measureText(String text) { return text.length(); }
@@ -89,14 +124,16 @@ public class Canvas {
     public int save() { return 0; } public void restore() { } public void restoreToCount(int n) { }
     public int saveLayerAlpha(RectF b, int a) { return 0; } public int saveLayerAlpha(float l, float t, float r, float b, int a) { return 0; }
     public boolean clipRect(RectF r) { return true; } public boolean clipRect(float l, float t, float r, float b) { return true; }
-    public void translate(float x, float y) { } public void scale(float x, float y, float px, float py) { }
+    public boolean clipPath(Path path) { return true; }
+    public void translate(float x, float y) { } public void scale(float x, float y, float px, float py) { } public void rotate(float d, float px, float py) { }
+    public void drawColor(int c) { } public void drawRoundRect(RectF r, float rx, float ry, Paint p) { }
     public void drawRect(RectF r, Paint p) { } public void drawRect(float l, float t, float r, float b, Paint p) { }
     public void drawLine(float a, float b, float c, float d, Paint p) { } public void drawText(String s, float x, float y, Paint p) { }
-    public void drawBitmap(Bitmap b, android.graphics.Rect s, RectF d, Paint p) { } public void drawCircle(float x, float y, float r, Paint p) { }
+    public void drawBitmap(Bitmap b, Rect s, RectF d, Paint p) { } public void drawBitmap(Bitmap b, Rect s, Rect d, Paint p) { } public void drawCircle(float x, float y, float r, Paint p) { }
     public void drawOval(RectF r, Paint p) { } public void drawArc(RectF r, float a, float b, boolean c, Paint p) { }
     public void drawPath(Path path, Paint p) { } public void drawPicture(Picture p) { }
 }''',
-    'android/graphics/Rect.java': 'package android.graphics; public class Rect { }',
+    'android/graphics/Rect.java': 'package android.graphics; public class Rect { public Rect() { } public Rect(int l, int t, int r, int b) { } public void set(int l, int t, int r, int b) { } }',
     'android/view/MotionEvent.java': '''package android.view;
 public class MotionEvent {
     public static final int ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2, ACTION_CANCEL = 3, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
@@ -121,7 +158,8 @@ public class View {
     public void setBackgroundColor(int c) { } public void setFocusable(boolean f) { } public void setContentDescription(CharSequence d) { }
     public void invalidate() { invalidated++; } public void postInvalidateOnAnimation() { }
     public boolean postDelayed(Runnable r, long ms) { return true; } public boolean removeCallbacks(Runnable r) { return true; }
-    public int getWidth() { return 0; } public int getHeight() { return 0; }
+    public static int testWidth, testHeight;
+    public int getWidth() { return testWidth; } public int getHeight() { return testHeight; }
     public boolean performClick() { return true; } public boolean onTouchEvent(MotionEvent e) { return false; }
     protected void onAttachedToWindow() { } protected void onDetachedFromWindow() { } protected void onDraw(android.graphics.Canvas c) { }
     protected void onSizeChanged(int w, int h, int ow, int oh) { } protected void onConfigurationChanged(android.content.res.Configuration c) { }
@@ -190,8 +228,45 @@ public final class Snapshot {
     public JSONArray items(int category) { return new JSONArray(); } public String itemCategory(int category, int index) { return CATEGORIES[category]; }
     public double coordinate(int axis) { return Double.NaN; }
 }''',
-    'com/aure/totk/companion/CompanionNative.java':
-        'package com.aure.totk.companion; public final class CompanionNative { public static boolean isEnabled() { return true; } }',
+    'com/aure/totk/BifrostBridge.java':
+        'package com.aure.totk; public final class BifrostBridge { public static volatile boolean enabled = true, syncScreenBrightness = true; public static volatile int lastScreenPct = -1; public static void setEnabled(boolean on) { enabled = on; } }',
+    'com/aure/totk/companion/CompanionNative.java': '''package com.aure.totk.companion;
+public final class CompanionNative {
+    public static boolean enabledRt;
+    public static int cycleCount;
+    public static boolean isEnabled() { return true; }
+    public static int setOverlayMode(int mode) { return mode < 0 ? 0 : mode; }
+    public static int warriorsMinimap(byte[] rgbaOut, int[] meta) { return 0; }
+    public static int warriorsMinimapCycle() { return ++cycleCount; }
+    public static void warriorsMinimapEnable(boolean on) { enabledRt = on; }
+    public static final int[] streamModes = new int[3];
+    public static void warriorsStreamMode(int stream, int mode) { if (stream >= 0 && stream < 3) streamModes[stream] = mode; }
+    public static int warriorsObjective(byte[] rgbaOut, int[] meta) { return 0; }
+    public static int warriorsLeftHud(byte[] rgbaOut, int[] meta) { return 0; }
+    public static int warriorsUiTex(byte[] rgbaOut, int[] meta, boolean request) { return 0; }
+}''',
+    'com/aure/totk/companion/WarriorsAssetHarvester.java': '''package com.aure.totk.companion;
+import android.content.Context; import android.graphics.Bitmap; import java.io.File;
+public final class WarriorsAssetHarvester {
+    public void loadCached(Context c) { }
+    public void harvestFromGameDirsAsync(Context c, File[] r, int k, Runnable u) { }
+    public void clearCache(Context c) { }
+    public void setMinimap(Bitmap bmp) { }
+    public Bitmap backdrop() { return null; }
+    public Bitmap filter() { return null; }
+    public Bitmap glyph() { return null; }
+    public Bitmap borderFrieze() { return null; }
+    public Bitmap borderEdge() { return null; }
+    public Bitmap borderSide() { return null; }
+    public Bitmap minimap() { return null; }
+    public Bitmap objective() { return null; }
+    public void setObjective(Bitmap bmp) { }
+    public Bitmap leftHud() { return null; }
+    public void setLeftHud(Bitmap bmp) { }
+    public boolean isSuppressed() { return false; }
+    public void setSuppressed(boolean s) { }
+    public String source() { return "NONE"; }
+}''',
     'com/aure/totk/companion/SnapshotPoller.java': '''package com.aure.totk.companion;
 public final class SnapshotPoller {
     public interface Listener { void changed(Snapshot snapshot, boolean stale); }
@@ -216,12 +291,47 @@ public final class ScreenProbe {
             @Override public String read(int detail) { return null; }
             @Override public boolean send(int kind, int arg) { return false; }
         };
-        boolean botw = args[0].equals("botw"), duo = args[1].equals("duo");
+        boolean botw = args[0].equals("botw"), duo = args[1].equals("duo"), warriors = args[1].equals("warriors");
         require(CompanionContent.TABLET_CAN_BE_MISSING == botw, "the build says whether its tablet can be missing");
-        for (int initial = 0; initial < 3; initial++) {
+        int lastPage = warriors ? 1 : 2;
+        for (int initial = 0; initial <= lastPage; initial++) {
             CompanionScreen screen = CompanionContent.create(context, source, initial);
             require(screen.view() == screen, "the screen is its own view");
-            require(screen.getClass().getSimpleName().equals(duo ? "DuoSurfaceView" : "CompanionView"), "this build's screen");
+            if (warriors) {
+                WarriorsCompanionModel wm = new WarriorsCompanionModel();
+                require(wm.stickLights && wm.stickSync, "stick lights and sync default ON");
+                require(wm.bgColor() == 0xFF000000 && wm.borderColor() == 0x00000000, "pure black borderless Purah theme");
+                wm.inGame = true; wm.hasLiveMinimap = false;
+                require(wm.dimmed() && wm.touchBlocked(), "empty live content auto-dims");
+                wm.hasLiveMinimap = true; wm.hostPaused = true;
+                require(wm.dimmed() && wm.touchBlocked(), "menu / hostPaused auto-dims");
+                wm.hostPaused = false; wm.inGame = false;
+                require(wm.dimmed() && wm.touchBlocked(), "not in-game auto-dims");
+                wm.inGame = true; wm.moviePlaying = true;
+                require(wm.dimmed() && wm.touchBlocked(), "movie auto-dims");
+                wm.selectTab(WarriorsCompanionModel.TAB_LEDGER);
+                require(!wm.dimmed() && !wm.touchBlocked(), "status tab lifts dim veil");
+                wm.selectTab(WarriorsCompanionModel.TAB_TACTICAL);
+                android.view.View.testWidth = 1240; android.view.View.testHeight = 1080;
+                WarriorsCompanionView tapProbe = (WarriorsCompanionView) screen;
+                tapProbe.setPage(WarriorsCompanionModel.TAB_TACTICAL);
+                android.view.MotionEvent tapStatus = new android.view.MotionEvent() {
+                    @Override public float getX() { return WarriorsCompanionLayout.TAB1_CX; }
+                    @Override public float getY() { return WarriorsCompanionLayout.NAV_CY; }
+                };
+                tapProbe.onTouchEvent(tapStatus);
+                require(tapProbe.page() == WarriorsCompanionModel.TAB_LEDGER, "tab taps through dim overlay to STATUS");
+                android.view.MotionEvent tapPad = new android.view.MotionEvent() {
+                    @Override public float getX() { return WarriorsCompanionLayout.TAB0_CX; }
+                    @Override public float getY() { return WarriorsCompanionLayout.NAV_CY; }
+                };
+                tapProbe.onTouchEvent(tapPad);
+                require(tapProbe.page() == WarriorsCompanionModel.TAB_TACTICAL, "tab taps back to PAD");
+                tapProbe.setPage(initial);
+                android.view.View.testWidth = 0; android.view.View.testHeight = 0;
+            }
+            String wantClass = duo ? "DuoSurfaceView" : warriors ? "WarriorsCompanionView" : "CompanionView";
+            require(screen.getClass().getSimpleName().equals(wantClass), "this build's screen");
             CompanionState state = new CompanionState();
             screen.onGameState(state);                                    // no state at all is a state a screen takes
             require(state.set(new long[]{CompanionState.READY, 1, 1, 1, 12, 12, initial, 0}), "state");
@@ -233,12 +343,13 @@ public final class ScreenProbe {
                 continue;
             }
             require(screen.page() == initial, "created on the page asked for");
-            for (int page = 0; page < 3; page++) { screen.setPage(page); require(screen.page() == page, "page round trip " + page); }
-            screen.setPage(7); require(screen.page() == 2, "beyond the last page: the last");
+            for (int page = 0; page <= lastPage; page++) { screen.setPage(page); require(screen.page() == page, "page round trip " + page); }
+            screen.setPage(7); require(screen.page() == lastPage, "beyond the last page: the last");
             screen.setPage(-3); require(screen.page() == 0, "before the first: the first");
             int redraws = android.view.View.invalidated, fulls = fullRequests();
             screen.setPage(1);
-            require(android.view.View.invalidated == redraws + 1 && fullRequests() == fulls + 1, "a page change redraws once and asks for the whole snapshot");
+            int expectFull = warriors ? fulls : fulls + 1;
+            require(android.view.View.invalidated == redraws + 1 && fullRequests() == expectFull, "a page change redraws once");
             // A loading screen named by the common state is a change of view: one redraw; the same state again: none.
             state.set(new long[]{CompanionState.LOADING, 0, 0, 1, -1, -1, 1, 0});
             redraws = android.view.View.invalidated;
@@ -417,6 +528,8 @@ class CompanionScreenTests(unittest.TestCase):
         """Both screens and the one CompanionContent, compiled with this game's generated GameBuild (with another
         companion value when given: the MIT page is chosen by no game today, but stays compiled and working)."""
         shared = [JAVA / n for n in ('CompanionScreen.java', 'CompanionState.java', 'DataSource.java', 'ItemActions.java', 'Motion.java',
+                                     'WarriorsCompanionModel.java', 'WarriorsCompanionLayout.java', 'WarriorsCompanionDraw.java',
+                                     'WarriorsCompanionView.java',
                                      'CompanionView.java', 'DuoSurfaceView.java', 'CompanionContent.java')]
         build = games.java(game)
         if companion:
@@ -446,6 +559,35 @@ class CompanionScreenTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn('pass: ready rules', self.run_probe(classes, 'com.aure.totk.companion.ReadyProbe'))
 
+    def test_hwaoc_screen_is_warriors_view(self):
+        classes = self.screen_classes('hwaoc')
+        self.assertIn('pass: companion screen hwaoc warriors', self.run_probe(classes, 'com.aure.totk.companion.ScreenProbe', 'hwaoc', 'warriors'))
+        draw_src = (JAVA / 'WarriorsCompanionDraw.java').read_text()
+        harvester_src = (JAVA / 'WarriorsAssetHarvester.java').read_text()
+        self.assertNotIn('CUTSCENE', draw_src)
+        self.assertNotIn('PURAH PAD LINK', draw_src)
+        self.assertNotIn('drawRoundRect', draw_src)
+        self.assertNotIn('0xF205080A', draw_src)
+        self.assertIn('Minimap Layer', draw_src)
+        self.assertNotIn('PixelCopy', harvester_src)
+        self.assertNotIn('BATTLE TIMER', draw_src)
+        self.assertNotIn('KEEPS / KOs', draw_src)
+        self.assertNotIn('STATE / FRAMES', draw_src)
+        self.assertNotIn('1% LOW', draw_src)
+        self.assertNotIn('PURE BLACK', draw_src)
+        self.assertNotIn('"STATUS"', draw_src)
+        self.assertNotIn('tabName(', draw_src)
+        self.assertIn('drawWallFrieze', draw_src)
+        self.assertIn('-90f', draw_src)
+        self.assertIn('c.rotate(', draw_src)
+        mm_src = (ANDROID / 'gfx/vk_minimap.h').read_text(encoding='utf-8')
+        self.assertIn('vk_mm_ubo_xy_bounds', mm_src)
+        draw_c = (ANDROID / 'gfx/vk_draw.c').read_text(encoding='utf-8')
+        self.assertIn('vk_mm_find_proj', mm_src)
+        for forbidden in ('save_img', 'pass_preclear', 'restore_box', 'mm_skip', 'skip_out'):
+            self.assertNotIn(forbidden, mm_src)
+            self.assertNotIn(forbidden, draw_c)
+
     def test_botw_screen_keeps_no_page_and_needs_no_library(self):
         # No libduo_host.so on the host: the class still loads and the screen still stands behind the interface.
         classes = self.screen_classes('botw')
@@ -465,6 +607,38 @@ class CompanionScreenTests(unittest.TestCase):
         sources = self.write('pump', {**view, 'com/aure/totk/companion/PumpProbe.java': PUMP_PRELUDE + pump + PUMP_TESTS})
         classes = self.build('pump', sources + [JAVA / n for n in ('CompanionScreen.java', 'CompanionState.java', 'DataSource.java')])
         self.assertIn('pass: companion shell pump', self.run_probe(classes, 'com.aure.totk.companion.PumpProbe'))
+
+
+class WarriorsLayoutMotion(unittest.TestCase):
+    """The Warriors companion's one layout and motion source (shared verbatim with the Age of Imprisonment port):
+    element rects in every live-element state stay inside the Pad frame and apart; live elements and the page switch
+    ease on frame time instead of snapping; per-frame size jitter is held; the view keeps drawing while anything moves."""
+
+    def test_layout_and_motion_suite(self):
+        javac, java = shutil.which('javac'), shutil.which('java')
+        if not javac or not java:
+            self.skipTest('a JDK is required')
+        layout = JAVA / 'WarriorsCompanionLayout.java'
+        self.assertNotIn('import android.', layout.read_text())
+        with tempfile.TemporaryDirectory(prefix='warriors-layout-') as tmp:
+            done = subprocess.run([javac, '--release', '17', '-Xlint:all', '-Werror', '-d', tmp, str(layout),
+                                   str(ROOT / 'tests/WarriorsCompanionLayoutTest.java')], capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            run = subprocess.run([java, '-cp', tmp, 'com.aure.totk.companion.WarriorsCompanionLayoutTest'],
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+            self.assertIn('WarriorsCompanionLayoutTest: PASS', run.stdout)
+
+    def test_draw_and_view_use_the_shared_layout(self):
+        draw = (JAVA / 'WarriorsCompanionDraw.java').read_text()
+        view = (JAVA / 'WarriorsCompanionView.java').read_text()
+        self.assertIn('scene.step(', draw)
+        self.assertNotIn('816f', draw)          # the minimap centre comes from the layout, not a literal
+        self.assertIn('if (moving) postInvalidateOnAnimation();', view)
+        self.assertIn('WarriorsCompanionLayout.statusRowAt(', view)
+        self.assertIn('WarriorsCompanionLayout.headerTabAt(', view)
+        self.assertIn('scanLeftHud(', draw)                 # left HUD is laid out by its content clusters
+        self.assertIn('c.drawBitmap(b, srcRect, dstF, imgPaint);', draw)
 
 
 class DuoTouchDefault(unittest.TestCase):

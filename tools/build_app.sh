@@ -2,11 +2,11 @@
 # Build one app flavour from this checkout: the one entry point for both apps (MAINTENANCE.md).
 #
 #   tools/build_app.sh <game> <flavour> [build_release.py options, e.g. --version-name 1.0.1-fork.3]
-#     game:    totk | botw                     (games/games.toml)
-#     flavour: totk: fork | dev; botw: release | dev
+#     game:    totk | botw | hwaoc             (games/games.toml)
+#     flavour: totk: fork | dev; botw/hwaoc: release | dev
 #
 # Package, launcher label, version, signing key and launcher art come from games/games.toml; the keys stay in
-# TOTK_KEYS_DIR (default /root/totk-work/keys) and never enter git. The defaults below are the build machine's;
+# TOTK_KEYS_DIR (default /root/totk-work/keys) and never enter git. The defaults below are the build machine's (the build container);
 # override them through the environment:
 #   NDK, ANDROID_HOME, PREBUILT (libtotk_turnip.so, libtotk_xlate.so), VENV (Python 3.12+ with cryptography),
 #   WORK (work folder, default /dev/shm/app-<game>-<flavour>), JOBS (default 4), DUO_JOBS (default 2: libduo_host.so

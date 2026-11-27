@@ -77,6 +77,8 @@ Oh, and you can be sure we'll do the same to the Switch 2 versions of your games
 - **Stick LEDs** that follow the Sheikah Slate through the [Bifrost](https://github.com/KuriGohan-Kamehameha/Bifrost)
   LED app.
 - **Fast start**: the mod overlay is verified once and remembered, so later starts skip re-checking it.
+- **Runtime & Vulkan optimizations (`Opts 2–60`)**: lock-free Horizon/SVC/HID/RomFS/audio/pacing fast paths and Vulkan command/descriptor/PSO/shader-cache memos (each env-switch gated), plus buffer-texture `UNIFORM_TEXEL_BUFFER` retyping with float views, one-slice 3D copy aliasing, and seed-shader `NEAR_IS_ZERO` depth correction.
+- **AYN Controller style auto-detection**: reads `persist.sys.gamepad.type` on AYN handhelds so built-in Xbox-style pads map by position (`TOTK_FACE_BUTTONS=position`).
 
 ## Requirements
 
@@ -175,7 +177,7 @@ two are being brought onto one common layer: [docs/companion-waist.md](docs/comp
 
 With the [Bifrost](https://github.com/KuriGohan-Kamehameha/Bifrost) LED app installed, the AYN Thor's stick rings
 follow the Sheikah Slate: its blue glow breathing, orange until the slate is yours, a dip when you touch the second
-screen or open the menu, a red stutter when hearts run low. To set it up:
+screen or open the menu, a red stutter when hearts run low, scaled automatically by screen brightness. To set it up:
 
 1. Install Bifrost and keep its LED service running.
 2. In Bifrost's settings, turn on **Allow third-party LED control**.

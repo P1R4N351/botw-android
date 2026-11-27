@@ -17,6 +17,19 @@
    The driver is the system one, or the file named by TOTK_VK_DRIVER (a Turnip build, android/gfx/vk_load.h). */
 #include <malloc.h>
 #include "vk_int.h"
+#include "totk_nvn_sub_fast.h"
+#include "vk_gw_fast.h"
+#include "vk_ub_fast.h"
+#include "vk_ktgl_memo.h"
+#include "vk_img_fast.h"
+#include "vk_imgmem_fast.h"
+#include "vk_post_fast.h"
+#include "vk_subcap_fast.h"
+#include "vk_res_samp_fast.h"
+_Static_assert(OP_COUNT_ == 48 && OP_DRAW_IDX == 26, "OP_* enum layout");
+static int subcap_fast_nvn_on(void) { static int off = -1; if (off < 0) off = vk_off("subcapfast"); return !off && totk_vk_subcap_fast_on(); }
+static int img_fast_nvn_on(void) { static int off = -1; if (off < 0) off = vk_off("imgfast"); return !off && totk_vk_img_fast_on(); }
+static int ktglmemo_nvn_on(void) { static int on = -1; if (on < 0) on = !vk_off("ktglmemo"); return on; }
 #include "vk_record.h"
 #include "vk_framegen.h"
 #include "vk_framegen_qcom.h"
@@ -153,10 +166,15 @@ static void xlate_deferred_bind(unsigned op, const uint8_t *a) {
     const p_bind_handles *b = (const void *)a;
     if ((unsigned)b->stage >= 6 || b->n < 0 || b->n > 32) return;
     unsigned kind = op == OP_BIND_TEX ? 0 : op == OP_BIND_IMG ? 1 : 2;
+    if (totk_vk_res_samp_fast_on()) {
+        totk_xlate_deferred_bind_fast(g_xlate->deferred[b->stage][kind], kind == 1 ? 32u : 128u, b->first, b->n, b->src != 0);
+        return;
+    }
     for (int i = 0; i < b->n; i++)
         if ((unsigned)b->first + (unsigned)i < (kind == 1 ? 32u : 128u)) g_xlate->deferred[b->stage][kind][b->first + i] = b->src != 0;
 }
 static void xlate_hash_bytes(xlate_hash *h, const void *bytes, size_t n) {
+    if (totk_vk_res_samp_fast_on()) { totk_xlate_hash_bytes_fast(h->h, bytes, n); return; }
     const uint8_t *p = bytes;
     for (size_t i = 0; i < n; i++) {
         h->h[0] = (h->h[0] ^ p[i]) * UINT64_C(1099511628211);
@@ -165,79 +183,142 @@ static void xlate_hash_bytes(xlate_hash *h, const void *bytes, size_t n) {
     }
 }
 typedef struct { size_t offset, size; } xlate_address_field;
-/* Raw records have no named payload type in nvn_obj.h; these layouts follow their memcpy writers in hle_nvn.c.
-   All other offsets/sizes come directly from the shared schema, including variable arrays (never address masks). */
+_Static_assert(sizeof(xlate_address_field) == sizeof(totk_xlate_field_t), "xlate field size");
 typedef struct { uint64_t address; uint32_t mode, value; } xlate_signal;
 typedef struct { uint64_t type, address; } xlate_counter;
 typedef struct { uint64_t source, destination, size; } xlate_copy;
 typedef struct { uint64_t destination, size; } xlate_update;
-static int xlate_address_fields(unsigned op, const uint8_t *a, size_t size, xlate_address_field fields[17]) {
+static const totk_xlate_op_spec_t k_xlate_specs[OP_COUNT_] = {
+    [OP_END] = {0, 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_JUMP] = {(uint16_t)sizeof(uint64_t), 0, TOTK_XL_FIXED1, 0, 1, 0, 0, 8, 0, 0},
+    [OP_BEGIN] = {0, 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_CALL] = {(uint16_t)sizeof(uint64_t), 0, TOTK_XL_FIXED1, 0, 1, 0, 0, 8, 0, 0},
+    [OP_SIGNAL_EVENT] = {(uint16_t)sizeof(xlate_signal), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(xlate_signal, address), 8, 0, 0},
+    [OP_REPORT_COUNTER] = {(uint16_t)sizeof(xlate_counter), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(xlate_counter, address), 8, 0, 0},
+    [OP_COPY_B2B] = {(uint16_t)sizeof(xlate_copy), 0, TOTK_XL_FIXED2, 0, 1, 0, (uint16_t)offsetof(xlate_copy, source), 8, (uint16_t)offsetof(xlate_copy, destination), 8},
+    [OP_UPDATE_UB] = {(uint16_t)sizeof(xlate_update), 0, TOTK_XL_UPDATE_UB, 0, 1, (uint8_t)offsetof(xlate_update, size), (uint16_t)offsetof(xlate_update, destination), 8, 0, 0},
+    [OP_SET_RT] = {(uint16_t)sizeof(p_set_rt), (uint16_t)sizeof(((p_set_rt *)0)->color[0]), TOTK_XL_SET_RT, 0, 1, 0, (uint16_t)offsetof(p_set_rt, color), (uint8_t)sizeof(((p_set_rt *)0)->color[0]), (uint16_t)offsetof(p_set_rt, depth), (uint8_t)sizeof(((p_set_rt *)0)->depth)},
+    [OP_CLEAR_COLOR] = {(uint16_t)sizeof(p_clear_color), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_CLEAR_DS] = {(uint16_t)sizeof(p_clear_ds), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_VIEWPORTS] = {(uint16_t)offsetof(p_viewports, v), (uint16_t)sizeof(((p_viewports *)0)->v[0]), TOTK_XL_ARR_CHECK, 16, 1, (uint8_t)offsetof(p_viewports, n), 0, 0, 0, 0},
+    [OP_SCISSOR] = {(uint16_t)sizeof(p_scissor), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_DEPTH_RANGE] = {(uint16_t)sizeof(p_depth_range), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_BIND_PROGRAM] = {(uint16_t)sizeof(p_bind_program), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_bind_program, prog), (uint8_t)sizeof(((p_bind_program *)0)->prog), 0, 0},
+    [OP_BIND_STATE] = {(uint16_t)sizeof(p_bind_state), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_BIND_VATTR] = {(uint16_t)offsetof(p_bind_vattr, st), (uint16_t)sizeof(((p_bind_vattr *)0)->st[0]), TOTK_XL_ARR_CHECK, 16, 1, (uint8_t)offsetof(p_bind_vattr, n), 0, 0, 0, 0},
+    [OP_BIND_VSTREAM] = {(uint16_t)offsetof(p_bind_vstream, st), (uint16_t)sizeof(((p_bind_vstream *)0)->st[0]), TOTK_XL_ARR_CHECK, 16, 1, (uint8_t)offsetof(p_bind_vstream, n), 0, 0, 0, 0},
+    [OP_BIND_VBUF] = {(uint16_t)offsetof(p_bind_vbuf, r), (uint16_t)sizeof(((p_bind_vbuf *)0)->r[0]), TOTK_XL_BIND_VBUF, 16, 1, (uint8_t)offsetof(p_bind_vbuf, n), 0, 0, (uint16_t)(offsetof(p_bind_vbuf, r) + offsetof(NVNbufferRange, address)), (uint8_t)sizeof(((NVNbufferRange *)0)->address)},
+    [OP_BIND_UBO] = {(uint16_t)sizeof(p_bind_buf), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_bind_buf, addr), 8, 0, 0},
+    [OP_BIND_SSBO] = {(uint16_t)sizeof(p_bind_buf), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_bind_buf, addr), 8, 0, 0},
+    [OP_BIND_TEX] = {(uint16_t)offsetof(p_bind_handles, h), (uint16_t)sizeof(uint64_t), TOTK_XL_ARR_CHECK, 32, 1, (uint8_t)offsetof(p_bind_handles, n), (uint16_t)offsetof(p_bind_handles, src), 8, 0, 0},
+    [OP_BIND_SAMP] = {(uint16_t)offsetof(p_bind_handles, h), (uint16_t)sizeof(uint64_t), TOTK_XL_ARR_CHECK, 32, 1, (uint8_t)offsetof(p_bind_handles, n), (uint16_t)offsetof(p_bind_handles, src), 8, 0, 0},
+    [OP_STENCIL] = {(uint16_t)sizeof(p_stencil), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_POLY_OFFSET] = {(uint16_t)sizeof(p_poly_offset), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_DRAW] = {(uint16_t)sizeof(p_draw), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_DRAW_IDX] = {(uint16_t)sizeof(p_draw_idx), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_draw_idx, ibuf), 8, 0, 0},
+    [OP_DISPATCH] = {(uint16_t)sizeof(p_dispatch), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_dispatch, caller), 8, 0, 0},
+    [OP_BARRIER] = {(uint16_t)sizeof(int32_t), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_SET_TEX_POOL] = {(uint16_t)sizeof(p_set_pool), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_set_pool, pool), (uint8_t)sizeof(((p_set_pool *)0)->pool), 0, 0},
+    [OP_SET_SAMP_POOL] = {(uint16_t)sizeof(p_set_pool), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_set_pool, pool), (uint8_t)sizeof(((p_set_pool *)0)->pool), 0, 0},
+    [OP_COPY_B2T] = {(uint16_t)sizeof(p_copy_b2t), 0, TOTK_XL_FIXED2, 0, 1, 0, (uint16_t)offsetof(p_copy_b2t, src), 8, (uint16_t)offsetof(p_copy_b2t, tex), (uint8_t)sizeof(((p_copy_b2t *)0)->tex)},
+    [OP_COPY_STRIDE] = {(uint16_t)sizeof(p_copy_stride), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_COPY_IMAGE_STRIDE] = {(uint16_t)sizeof(p_copy_stride), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_BLEND_COLOR] = {(uint16_t)sizeof(p_blend_color), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_COPY_T2B] = {(uint16_t)sizeof(p_copy_b2t), 0, TOTK_XL_FIXED2, 0, 1, 0, (uint16_t)offsetof(p_copy_b2t, src), 8, (uint16_t)offsetof(p_copy_b2t, tex), (uint8_t)sizeof(((p_copy_b2t *)0)->tex)},
+    [OP_BIND_IMG] = {(uint16_t)offsetof(p_bind_handles, h), (uint16_t)sizeof(uint64_t), TOTK_XL_ARR_CHECK, 32, 1, (uint8_t)offsetof(p_bind_handles, n), (uint16_t)offsetof(p_bind_handles, src), 8, 0, 0},
+    [OP_COPY_T2T] = {(uint16_t)sizeof(p_copy_t2t), 0, TOTK_XL_FIXED2, 0, 1, 0, (uint16_t)offsetof(p_copy_t2t, src), (uint8_t)sizeof(((p_copy_t2t *)0)->src), (uint16_t)offsetof(p_copy_t2t, dst), (uint8_t)sizeof(((p_copy_t2t *)0)->dst)},
+    [OP_RESET_COUNTER] = {(uint16_t)sizeof(uint64_t), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_CLEAR_TEX] = {(uint16_t)sizeof(p_clear_tex), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_clear_tex, tex), (uint8_t)sizeof(((p_clear_tex *)0)->tex), 0, 0},
+    [OP_DEPTH_CLAMP] = {(uint16_t)sizeof(p_flag), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_RENDER_ENABLE] = {(uint16_t)sizeof(p_flag), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_RASTER_DISCARD] = {(uint16_t)sizeof(p_flag), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_RENDER_COND] = {(uint16_t)sizeof(p_render_cond), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_render_cond, addr), 8, 0, 0},
+    [OP_ALPHA_REF] = {(uint16_t)sizeof(p_alpha_ref), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0},
+    [OP_DRAW_INDIRECT] = {(uint16_t)sizeof(p_draw_indirect), 0, TOTK_XL_FIXED1, 0, 1, 0, (uint16_t)offsetof(p_draw_indirect, buf), 8, 0, 0},
+    [OP_DRAW_IDX_INDIRECT] = {(uint16_t)sizeof(p_draw_idx_indirect), 0, TOTK_XL_FIXED2, 0, 1, 0, (uint16_t)offsetof(p_draw_idx_indirect, ibuf), 8, (uint16_t)offsetof(p_draw_idx_indirect, buf), 8},
+    [OP_UI_TAG] = {(uint16_t)sizeof(p_ui_tag), 0, TOTK_XL_NONE, 0, 1, 0, 0, 0, 0, 0}
+};
+static int xlate_address_fields_slow_misc(unsigned op, size_t size) {
+    switch (op) {
+        case OP_END: case OP_BEGIN: return 0;
+        case OP_CLEAR_COLOR: return size < sizeof(p_clear_color) ? -1 : 0;
+        case OP_CLEAR_DS: return size < sizeof(p_clear_ds) ? -1 : 0;
+        case OP_ALPHA_REF: return size < sizeof(p_alpha_ref) ? -1 : 0;
+        case OP_UI_TAG: return size < sizeof(p_ui_tag) ? -1 : 0;
+        case OP_SCISSOR: return size < sizeof(p_scissor) ? -1 : 0;
+        case OP_DEPTH_RANGE: return size < sizeof(p_depth_range) ? -1 : 0;
+        case OP_BIND_STATE: return size < sizeof(p_bind_state) ? -1 : 0;
+        case OP_STENCIL: return size < sizeof(p_stencil) ? -1 : 0;
+        case OP_POLY_OFFSET: return size < sizeof(p_poly_offset) ? -1 : 0;
+        case OP_DRAW: return size < sizeof(p_draw) ? -1 : 0;
+        case OP_BARRIER: return size < sizeof(int32_t) ? -1 : 0;
+        case OP_COPY_STRIDE: case OP_COPY_IMAGE_STRIDE: return size < sizeof(p_copy_stride) ? -1 : 0;
+        case OP_BLEND_COLOR: return size < sizeof(p_blend_color) ? -1 : 0;
+        case OP_RESET_COUNTER: return size < sizeof(uint64_t) ? -1 : 0;
+        case OP_DEPTH_CLAMP: case OP_RENDER_ENABLE: case OP_RASTER_DISCARD: return size < sizeof(p_flag) ? -1 : 0;
+        default: return -2;
+    }
+}
+static int xlate_address_fields_slow_arr(unsigned op, const uint8_t *a, size_t size, xlate_address_field fields[17]) {
+    if (op == OP_SET_RT) {
+        if (size < sizeof(p_set_rt)) return -1;
+        for (unsigned i = 0; i < 8; i++) fields[i] = (xlate_address_field){offsetof(p_set_rt, color) + i * sizeof(((p_set_rt *)0)->color[0]), sizeof(((p_set_rt *)0)->color[0])};
+        fields[8] = (xlate_address_field){offsetof(p_set_rt, depth), sizeof(((p_set_rt *)0)->depth)};
+        return 9;
+    }
+    if (op == OP_BIND_VBUF) {
+        if (size < offsetof(p_bind_vbuf, r)) return -1;
+        const p_bind_vbuf *b = (const void *)a;
+        if (b->n < 0 || b->n > 16 || (size_t)b->n > (size - offsetof(p_bind_vbuf, r)) / sizeof b->r[0]) return -1;
+        for (int i = 0; i < b->n; i++) fields[i] = (xlate_address_field){offsetof(p_bind_vbuf, r) + (size_t)i * sizeof b->r[0] + offsetof(NVNbufferRange, address), sizeof b->r[0].address};
+        return b->n;
+    }
+    if (op == OP_BIND_TEX || op == OP_BIND_IMG || op == OP_BIND_SAMP) {
+        if (size < offsetof(p_bind_handles, h)) return -1;
+        const p_bind_handles *b = (const void *)a;
+        if (b->n < 0 || b->n > 32 || (size_t)b->n > (size - offsetof(p_bind_handles, h)) / sizeof b->h[0]) return -1;
+        fields[0] = (xlate_address_field){offsetof(p_bind_handles, src), sizeof b->src};
+        return 1;
+    }
+    if (op == OP_VIEWPORTS) { const p_viewports *b = (const void *)a; return (size >= offsetof(p_viewports, v) && b->n >= 0 && b->n <= 16 && (size_t)b->n <= (size - offsetof(p_viewports, v)) / sizeof b->v[0]) ? 0 : -1; }
+    if (op == OP_BIND_VATTR) { const p_bind_vattr *b = (const void *)a; return (size >= offsetof(p_bind_vattr, st) && b->n >= 0 && b->n <= 16 && (size_t)b->n <= (size - offsetof(p_bind_vattr, st)) / sizeof b->st[0]) ? 0 : -1; }
+    if (op == OP_BIND_VSTREAM) { const p_bind_vstream *b = (const void *)a; return (size >= offsetof(p_bind_vstream, st) && b->n >= 0 && b->n <= 16 && (size_t)b->n <= (size - offsetof(p_bind_vstream, st)) / sizeof b->st[0]) ? 0 : -1; }
+    return -2;
+}
+static int xlate_address_fields_slow(unsigned op, const uint8_t *a, size_t size, xlate_address_field fields[17]) {
+    int r = xlate_address_fields_slow_misc(op, size);
+    if (r != -2) return r;
+    r = xlate_address_fields_slow_arr(op, a, size, fields);
+    if (r != -2) return r;
     unsigned n = 0;
 #define XLATE_NEED(type) do { if (size < sizeof(type)) return -1; } while (0)
 #define XLATE_FIELD(type, member) do { fields[n++] = (xlate_address_field){offsetof(type, member), sizeof(((type *)0)->member)}; } while (0)
-#define XLATE_ARRAY(type, member, maximum) do { \
-    if (size < offsetof(type, member)) return -1; \
-    const type *b = (const void *)a; \
-    if (b->n < 0 || b->n > (maximum) || (size_t)b->n > (size - offsetof(type, member)) / sizeof b->member[0]) return -1; \
-} while (0)
     switch (op) {
-        case OP_END: case OP_BEGIN: break;
-        case OP_JUMP: case OP_CALL:
-            XLATE_NEED(uint64_t); fields[n++] = (xlate_address_field){0, sizeof(uint64_t)}; break;
+        case OP_JUMP: case OP_CALL: XLATE_NEED(uint64_t); fields[n++] = (xlate_address_field){0, sizeof(uint64_t)}; break;
         case OP_SIGNAL_EVENT: XLATE_NEED(xlate_signal); XLATE_FIELD(xlate_signal, address); break;
         case OP_REPORT_COUNTER: XLATE_NEED(xlate_counter); XLATE_FIELD(xlate_counter, address); break;
         case OP_COPY_B2B: XLATE_NEED(xlate_copy); XLATE_FIELD(xlate_copy, source); XLATE_FIELD(xlate_copy, destination); break;
-        case OP_UPDATE_UB: {
-            XLATE_NEED(xlate_update); const xlate_update *u = (const void *)a;
-            if (u->size > size - sizeof *u) return -1;
-            XLATE_FIELD(xlate_update, destination); break;
-        }
-        case OP_SET_RT:
-            XLATE_NEED(p_set_rt);
-            for (unsigned i = 0; i < 8; i++) fields[n++] = (xlate_address_field){
-                offsetof(p_set_rt, color) + i * sizeof(((p_set_rt *)0)->color[0]), sizeof(((p_set_rt *)0)->color[0])};
-            XLATE_FIELD(p_set_rt, depth); break;
+        case OP_UPDATE_UB: { XLATE_NEED(xlate_update); const xlate_update *u = (const void *)a; if (u->size > size - sizeof *u) return -1; XLATE_FIELD(xlate_update, destination); break; }
         case OP_BIND_PROGRAM: XLATE_NEED(p_bind_program); XLATE_FIELD(p_bind_program, prog); break;
-        case OP_BIND_VBUF: {
-            XLATE_ARRAY(p_bind_vbuf, r, 16); const p_bind_vbuf *b = (const void *)a;
-            for (int i = 0; i < b->n; i++) fields[n++] = (xlate_address_field){
-                offsetof(p_bind_vbuf, r) + (size_t)i * sizeof b->r[0] + offsetof(NVNbufferRange, address), sizeof b->r[0].address};
-            break;
-        }
         case OP_BIND_UBO: case OP_BIND_SSBO: XLATE_NEED(p_bind_buf); XLATE_FIELD(p_bind_buf, addr); break;
-        case OP_BIND_TEX: case OP_BIND_IMG: case OP_BIND_SAMP:
-            XLATE_ARRAY(p_bind_handles, h, 32); XLATE_FIELD(p_bind_handles, src); break;
         case OP_DRAW_IDX: XLATE_NEED(p_draw_idx); XLATE_FIELD(p_draw_idx, ibuf); break;
+        case OP_DRAW_INDIRECT: XLATE_NEED(p_draw_indirect); XLATE_FIELD(p_draw_indirect, buf); break;
+        case OP_DRAW_IDX_INDIRECT: XLATE_NEED(p_draw_idx_indirect); XLATE_FIELD(p_draw_idx_indirect, ibuf); XLATE_FIELD(p_draw_idx_indirect, buf); break;
         case OP_DISPATCH: XLATE_NEED(p_dispatch); XLATE_FIELD(p_dispatch, caller); break;
         case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: XLATE_NEED(p_set_pool); XLATE_FIELD(p_set_pool, pool); break;
-        case OP_COPY_B2T: case OP_COPY_T2B:
-            XLATE_NEED(p_copy_b2t); XLATE_FIELD(p_copy_b2t, src); XLATE_FIELD(p_copy_b2t, tex); break;
+        case OP_COPY_B2T: case OP_COPY_T2B: XLATE_NEED(p_copy_b2t); XLATE_FIELD(p_copy_b2t, src); XLATE_FIELD(p_copy_b2t, tex); break;
         case OP_COPY_T2T: XLATE_NEED(p_copy_t2t); XLATE_FIELD(p_copy_t2t, src); XLATE_FIELD(p_copy_t2t, dst); break;
         case OP_CLEAR_TEX: XLATE_NEED(p_clear_tex); XLATE_FIELD(p_clear_tex, tex); break;
         case OP_RENDER_COND: XLATE_NEED(p_render_cond); XLATE_FIELD(p_render_cond, addr); break;
-        case OP_CLEAR_COLOR: XLATE_NEED(p_clear_color); break;
-        case OP_CLEAR_DS: XLATE_NEED(p_clear_ds); break;
-        case OP_ALPHA_REF: XLATE_NEED(p_alpha_ref); break;
-        case OP_VIEWPORTS: XLATE_ARRAY(p_viewports, v, 16); break;
-        case OP_SCISSOR: XLATE_NEED(p_scissor); break;
-        case OP_DEPTH_RANGE: XLATE_NEED(p_depth_range); break;
-        case OP_BIND_STATE: XLATE_NEED(p_bind_state); break;
-        case OP_BIND_VATTR: XLATE_ARRAY(p_bind_vattr, st, 16); break;
-        case OP_BIND_VSTREAM: XLATE_ARRAY(p_bind_vstream, st, 16); break;
-        case OP_STENCIL: XLATE_NEED(p_stencil); break;
-        case OP_POLY_OFFSET: XLATE_NEED(p_poly_offset); break;
-        case OP_DRAW: XLATE_NEED(p_draw); break;
-        case OP_BARRIER: XLATE_NEED(int32_t); break;
-        case OP_COPY_STRIDE: XLATE_NEED(p_copy_stride); break;
-        case OP_BLEND_COLOR: XLATE_NEED(p_blend_color); break;
-        case OP_RESET_COUNTER: XLATE_NEED(uint64_t); break;
-        case OP_DEPTH_CLAMP: case OP_RENDER_ENABLE: case OP_RASTER_DISCARD: XLATE_NEED(p_flag); break;
         default: return -1;
     }
-#undef XLATE_ARRAY
 #undef XLATE_FIELD
 #undef XLATE_NEED
     return (int)n;
+}
+static int xlate_address_fields(unsigned op, const uint8_t *a, size_t size, xlate_address_field fields[17]) {
+    if (totk_vk_res_samp_fast_on()) return totk_xlate_address_fields_fast(k_xlate_specs, OP_COUNT_, op, a, size, (totk_xlate_field_t *)fields);
+    return xlate_address_fields_slow(op, a, size, fields);
 }
 static int xlate_hash_equal(const xlate_hash *a, const xlate_hash *b) {
     return a->h[0] == b->h[0] && a->h[1] == b->h[1] && a->bytes == b->bytes && a->ops == b->ops;
@@ -385,7 +466,7 @@ static int rec_stream_begin(void) {
 static void rec_sample_begin(unsigned op) {
     if (!T_rec.active) return;
     if (T_rec.rate == 1) { if (T_rec.timeline) totk_ft_count(FT_COUNT_REC_SAMPLES, 1); return; }
-    if (op == OP_DRAW_IDX) op = OP_DRAW; /* sample graphics attempts together, not one index type's phase */
+    if (op == OP_DRAW_IDX || op == OP_DRAW_INDIRECT || op == OP_DRAW_IDX_INDIRECT) op = OP_DRAW; /* sample graphics attempts together */
     uint64_t seq = ++g_rec_sample_seq[op], hash = seq * 0x9e3779b97f4a7c15ull;
     hash ^= hash >> 32;
     if (!(hash & (T_rec.rate - 1))) {
@@ -541,7 +622,10 @@ static PFN_vkGetPhysicalDeviceExternalBufferProperties vkGetPhysicalDeviceExtern
 static VkExtensionProperties *g_ext; static uint32_t g_next;
 static int has_ext(const char *n) { for (uint32_t i = 0; i < g_next; i++) if (!strcmp(g_ext[i].extensionName, n)) return 1; return 0; }
 
+static totk_memtype_lut g_totk_memtype_lut;
 int vk_pick_type(uint32_t bits, VkMemoryPropertyFlags want) {
+    if (totk_vk_imgmem_fast_on() && g_totk_memtype_lut.ready && g_totk_memtype_lut.count == V.mp.memoryTypeCount)
+        return totk_memtype_pick_fast(&g_totk_memtype_lut, bits, want, 0);
     for (uint32_t i = 0; i < V.mp.memoryTypeCount; i++) if ((bits >> i & 1) && (V.mp.memoryTypes[i].propertyFlags & want) == want) return (int)i;
     return -1;
 }
@@ -657,6 +741,9 @@ static void vk_init_once(void) {
     if (V.props.apiVersion < VK_API_VERSION_1_3) DIE("%s offers Vulkan %u.%u; 1.3 is needed", V.props.deviceName, VK_API_VERSION_MAJOR(V.props.apiVersion), VK_API_VERSION_MINOR(V.props.apiVersion));
     LOGV("device %s, driver %s %s (%s%s%s)", V.props.deviceName, drvp.driverName, drvp.driverInfo, kind, drv ? " " : "", drv ? drv : "");
     vkGetPhysicalDeviceMemoryProperties(V.pd, &V.mp);
+    { uint32_t fl[32] = {0}; uint32_t n = V.mp.memoryTypeCount < 32u ? V.mp.memoryTypeCount : 32u;
+      for (uint32_t i = 0u; i < n; i++) fl[i] = V.mp.memoryTypes[i].propertyFlags;
+      totk_memtype_lut_build(&g_totk_memtype_lut, n, fl); }
     vkEnumerateDeviceExtensionProperties(V.pd, NULL, &g_next, NULL);
     g_ext = VK_CALLOC(g_next, sizeof *g_ext);
     vkEnumerateDeviceExtensionProperties(V.pd, NULL, &g_next, g_ext);
@@ -888,7 +975,7 @@ static void vk_init_once(void) {
                          g_occl_on ? "on" : "off: required features missing", f12.hostQueryReset, f2.features.occlusionQueryPrecise); }
     vkGetDeviceQueue(V.dev, V.qfam, 0, &V.queue);
     int gpu_time_default_hardware = 0;
-#if defined(__ANDROID__) && !defined(GAME_BOTW)
+#if defined(__ANDROID__) && !defined(GAME_BOTW) && !defined(GAME_HWAOC)
     const char *fps60 = getenv("TOTK_FPS60");
     gpu_time_default_hardware = !fps60 || !strcmp(fps60, "0");
 #endif
@@ -989,6 +1076,19 @@ static span_t *g_span; static span_seg_t *g_span_seg; static int *g_span_heap; s
 static _Atomic uint64_t g_span_gen = 1;   /* bumped (under g_pool_mu) with every change of the pools or aliases */
 static _Atomic uint64_t g_owner_gen = 1; /* physical buffer ownership, independent of virtual mapping churn */
 static void span_changed(void) { g_span_dirty = 1; atomic_fetch_add_explicit(&g_span_gen, 1, memory_order_release); }
+static totk_pool_map_t g_pool_map; static uint64_t g_pool_map_ogen; static int g_pool_map_dirty = 1, g_pool_map_n = -1;
+static void pool_map_sync_locked(void) {
+    uint64_t og = atomic_load_explicit(&g_owner_gen, memory_order_acquire);
+    if (!g_pool_map_dirty && g_pool_map_ogen == og && g_pool_map_n == g_npool) return;
+    totk_pool_map_clear(&g_pool_map);
+    for (int i = 0; i < g_npool; i++) {
+        const pool_ent *p = g_pools[i];
+        if (p->kind == K_OWN) totk_pool_map_put_buf(&g_pool_map, (uint64_t)(uintptr_t)p->buf, (uint64_t)p->base);
+        totk_pool_map_put_id(&g_pool_map, p->identity, i);
+        totk_pool_map_put_ls(&g_pool_map, (uint64_t)p->lo, (uint64_t)(p->hi - p->lo), i);
+    }
+    g_pool_map_ogen = og; g_pool_map_n = g_npool; g_pool_map_dirty = 0;
+}
 
 static uintptr_t page_sz(void) { static uintptr_t p; if (!p) p = (uintptr_t)getpagesize(); return p; }
 static pool_ent *own_containing(uintptr_t a, uintptr_t b) {   /* caller holds g_pool_mu */
@@ -1072,6 +1172,7 @@ static void pool_insert(pool_ent *e) {
     e->identity = ++g_pool_identity;
     if (g_npool == g_cappool) { g_cappool = g_cappool ? 2 * g_cappool : 64; g_pools = VK_REALLOC(g_pools, (size_t)g_cappool * sizeof *g_pools); }
     g_pools[g_npool++] = e;
+    g_pool_map_dirty = 1;
 }
 static void add_range(const void *mem, uint64_t size, int virt) {
     mtl_init();
@@ -1099,7 +1200,7 @@ static void del_range(const void *mem, int wait_gpu) {
     /* Finalize owns recording and has waited outside the registry; no producer
        can reserve another ticket before destruction. MapVirtual keeps its old path. */
     if (!wait_gpu && !pool_gpu_quiet()) DIE("pool finalize lost recording exclusion");
-    pool_ent *e = g_pools[idx]; g_pools[idx] = g_pools[--g_npool]; span_changed();
+    pool_ent *e = g_pools[idx]; g_pools[idx] = g_pools[--g_npool]; g_pool_map_dirty = 1; span_changed();
     if (e->kind == K_VIRT) {   /* its aliases go with it (MapVirtual re-adds the pool after remapping) */
         for (int i = 0; i < g_nalias; ) { if (g_alias[i].va >= e->base && g_alias[i].end <= e->end) g_alias[i] = g_alias[--g_nalias]; else i++; }
     }
@@ -1126,7 +1227,14 @@ uint64_t vk_wb_pool_identity(const pool_t *pool, const void *address, uint64_t s
     uint64_t identity = 0; uintptr_t a = (uintptr_t)address;
     if (!pool || !pool->mem || !size || size > UINTPTR_MAX - a) return 0;
     pthread_mutex_lock(&g_pool_mu);
-    for (int i = g_npool - 1; i >= 0; i--) {
+    if (totk_vk_bind_wb_fast_on() && g_npool <= 2048) {
+        pool_map_sync_locked();
+        int32_t idx = totk_pool_map_find_ls(&g_pool_map, (uint64_t)(uintptr_t)pool->mem, pool->size);
+        if (idx >= 0 && idx < g_npool) {
+            pool_ent *p = g_pools[idx];
+            if (p->lo == (uintptr_t)pool->mem && p->hi - p->lo == pool->size && a >= p->lo && a + size <= p->hi) identity = p->identity;
+        }
+    } else for (int i = g_npool - 1; i >= 0; i--) {
         pool_ent *p = g_pools[i];
         if (p->lo == (uintptr_t)pool->mem && p->hi - p->lo == pool->size && a >= p->lo && a + size <= p->hi) {
             identity = p->identity; break;
@@ -1139,7 +1247,14 @@ int vk_wb_pool_lock(uint64_t identity, const void *address, uint64_t size) {
     uintptr_t a = (uintptr_t)address;
     if (!identity || !size || size > UINTPTR_MAX - a) return 0;
     pthread_mutex_lock(&g_pool_mu);
-    for (int i = 0; i < g_npool; i++) {
+    if (totk_vk_bind_wb_fast_on() && g_npool <= 2048) {
+        pool_map_sync_locked();
+        int32_t idx = totk_pool_map_find_id(&g_pool_map, identity);
+        if (idx >= 0 && idx < g_npool) {
+            pool_ent *p = g_pools[idx];
+            if (p->identity == identity && a >= p->lo && a + size <= p->hi) return 1;
+        }
+    } else for (int i = 0; i < g_npool; i++) {
         pool_ent *p = g_pools[i];
         if (p->identity == identity && a >= p->lo && a + size <= p->hi) return 1;
     }
@@ -1205,11 +1320,18 @@ static void span_rebuild(void) {   /* caller holds g_pool_mu */
         if (p->kind == K_OWN) g_span[g_nspan++] = (span_t){p->base, p->end, p->buf, 0};
         else if (p->kind == K_VIEW) g_span[g_nspan++] = (span_t){p->base, p->end, p->owner->buf, p->off};
     }
-    qsort(g_span, (size_t)g_nspan, sizeof *g_span, span_cmp);
-    for (int i = 0; i < g_nspan; i++) { g_span_seg[2 * i] = (span_seg_t){g_span[i].lo, -1}; g_span_seg[2 * i + 1] = (span_seg_t){g_span[i].end, -1}; }
-    qsort(g_span_seg, (size_t)g_nspan * 2, sizeof *g_span_seg, span_seg_cmp);
-    g_nseg = 0;
-    for (int i = 0; i < 2 * g_nspan; i++) if (!g_nseg || g_span_seg[i].lo != g_span_seg[g_nseg - 1].lo) g_span_seg[g_nseg++].lo = g_span_seg[i].lo;
+    _Static_assert(sizeof(span_t) == sizeof(totk_span32_t) && offsetof(span_t, lo) == 0 && sizeof(span_seg_t) == sizeof(totk_span_ep_t) && offsetof(span_seg_t, lo) == offsetof(totk_span_ep_t, lo) && offsetof(span_seg_t, best) == offsetof(totk_span_ep_t, best), "span layout");
+    if (totk_vk_copy_span_fast_on()) {
+        totk_sort_spans_stable(g_span, g_span_seg, g_nspan);
+        for (int i = 0; i < g_nspan; i++) { g_span_seg[2 * i] = (span_seg_t){g_span[i].lo, -1}; g_span_seg[2 * i + 1] = (span_seg_t){g_span[i].end, -1}; }
+        g_nseg = totk_sort_dedup_ep(g_span_seg, 2 * g_nspan);
+    } else {
+        qsort(g_span, (size_t)g_nspan, sizeof *g_span, span_cmp);
+        for (int i = 0; i < g_nspan; i++) { g_span_seg[2 * i] = (span_seg_t){g_span[i].lo, -1}; g_span_seg[2 * i + 1] = (span_seg_t){g_span[i].end, -1}; }
+        qsort(g_span_seg, (size_t)g_nspan * 2, sizeof *g_span_seg, span_seg_cmp);
+        g_nseg = 0;
+        for (int i = 0; i < 2 * g_nspan; i++) if (!g_nseg || g_span_seg[i].lo != g_span_seg[g_nseg - 1].lo) g_span_seg[g_nseg++].lo = g_span_seg[i].lo;
+    }
     /* Heap order matches the old backward scan exactly: largest end, then highest sorted span index. */
     int next = 0, nh = 0;
     for (int i = 0; i < g_nseg; i++) {
@@ -1245,15 +1367,41 @@ static void span_rebuild(void) {   /* caller holds g_pool_mu */
 static int span_hint_matches(const span_seg_t *seg, int nseg, uintptr_t a, int hint) {
     return hint > 0 && hint < nseg && seg[hint - 1].lo <= a && a < seg[hint].lo;
 }
+static int span_bsearch(const span_seg_t *seg, int nseg, uintptr_t a) {
+    if (totk_vk_copy_span_fast_on()) return totk_span_bsearch_ep(seg, nseg, a);
+    int lo = 0, hi = nseg;
+    while (lo < hi) { int m = (lo + hi) >> 1; if (seg[m].lo <= a) lo = m + 1; else hi = m; }
+    return lo;
+}
 static const span_t *span_best(const span_t *s, const span_seg_t *seg, int nseg, uintptr_t a, uintptr_t b, int *hint) {
     int lo = hint ? *hint : 0;
     if (!hint || !span_hint_matches(seg, nseg, a, lo)) {
-        int hi = nseg; lo = 0; while (lo < hi) { int m = (lo + hi) >> 1; if (seg[m].lo <= a) lo = m + 1; else hi = m; }
+        lo = span_bsearch(seg, nseg, a);
         if (hint) *hint = lo;
     }
     if (!lo || seg[lo - 1].best < 0) return NULL;
     const span_t *best = &s[seg[lo - 1].best];
     return best->end >= b ? best : NULL;   /* if the furthest span containing a cannot reach b, none can */
+}
+static const span_t *span_best_fast(const span_t *s, const span_seg_t *seg, int nseg, uintptr_t a, uintptr_t b, int hints[64], int *was_hit) {
+    if (!hints) {
+        if (was_hit) *was_hit = 0;
+        return span_best(s, seg, nseg, a, b, NULL);
+    }
+    int *w = &hints[vk_ktgl_hint_set4(a)];
+    int lo = 0;
+    if (span_hint_matches(seg, nseg, a, w[0])) lo = w[0];
+    else if (span_hint_matches(seg, nseg, a, w[1])) lo = w[1];
+    else if (span_hint_matches(seg, nseg, a, w[2])) lo = w[2];
+    else if (span_hint_matches(seg, nseg, a, w[3])) lo = w[3];
+    if (was_hit) *was_hit = lo != 0;
+    if (!lo) {
+        lo = span_bsearch(seg, nseg, a);
+        w[3] = w[2]; w[2] = w[1]; w[1] = w[0]; w[0] = lo;
+    }
+    if (!lo || seg[lo - 1].best < 0) return NULL;
+    const span_t *best = &s[seg[lo - 1].best];
+    return best->end >= b ? best : NULL;
 }
 static int span_linear(void) { static int linear = -1; if (linear < 0) linear = vk_off("span"); return linear; }
 /* Which buffer holds [addr, addr + len), and how many bytes from addr it holds (*avail): caller holds g_pool_mu. */
@@ -1303,11 +1451,8 @@ void vk_lookup_stats(uint64_t frame) {
          (unsigned long long)frame, (double)c[0] / frames, (double)c[1] / frames, (double)c[2] / frames, (double)c[3] / frames,
          tests ? 100.0 * hit / tests : 0, (unsigned long long)hit, (unsigned long long)tests);
 }
-static int resolve_local(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off, uint64_t *avail, int kind) {
-    uintptr_t a = (uintptr_t)addr, b = a + len;
-    if (b < a) return 0;
-    if (span_linear()) { if (g_lookup_stats) lookup_count(kind, NULL, a, 0, 0); pthread_mutex_lock(&g_pool_mu); int ok = resolve_span(addr, len, buf, off, avail); pthread_mutex_unlock(&g_pool_mu); return ok; }
-    span_cache_t *t = &T_span;   /* one dynamic TLS resolution per lookup */
+static span_cache_t *span_cache_ready(void) {
+    span_cache_t *t = &T_span;
     if (t->gen != atomic_load_explicit(&g_span_gen, memory_order_acquire)) {
         pthread_mutex_lock(&g_pool_mu);
         if (g_span_dirty) span_rebuild();
@@ -1316,11 +1461,29 @@ static int resolve_local(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *o
         t->nseg = g_nseg; memset(t->hint, 0, sizeof t->hint); t->gen = atomic_load_explicit(&g_span_gen, memory_order_relaxed);
         pthread_mutex_unlock(&g_pool_mu);
     }
-    /* One last-segment hint thrashes between a draw's uniform, vertex and index pools: 69% of resolve_local samples at
-       Lookout Landing were still in the binary search. Keep page-hashed hints; collisions only fall back to that search. */
-    unsigned h = (unsigned)((a >> 12) ^ (a >> 24)) & (SPAN_HINTS - 1);
-    if (g_lookup_stats) lookup_count(kind, t, a, t->hint[h], 1);
-    const span_t *best = span_best(t->s, t->seg, t->nseg, a, b, &t->hint[h]);
+    return t;
+}
+static int resolve_local(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off, uint64_t *avail, int kind) {
+    uintptr_t a = (uintptr_t)addr, b = a + len;
+    if (b < a) return 0;
+    if (span_linear()) { if (g_lookup_stats) lookup_count(kind, NULL, a, 0, 0); pthread_mutex_lock(&g_pool_mu); int ok = resolve_span(addr, len, buf, off, avail); pthread_mutex_unlock(&g_pool_mu); return ok; }
+    span_cache_t *t = span_cache_ready();
+    const span_t *best;
+    if (ktglmemo_nvn_on()) {
+        int was_hit = 0;
+        best = span_best_fast(t->s, t->seg, t->nseg, a, b, t->hint, &was_hit);
+        if (g_lookup_stats) {
+            if ((uintptr_t)pthread_self() == atomic_load_explicit(&g_lookup_thread, memory_order_relaxed)) {
+                atomic_fetch_add_explicit(&g_lookup_calls[kind], 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&g_lookup_tests, 1, memory_order_relaxed);
+                if (was_hit) atomic_fetch_add_explicit(&g_lookup_hits, 1, memory_order_relaxed);
+            }
+        }
+    } else {
+        unsigned h = (unsigned)((a >> 12) ^ (a >> 24)) & (SPAN_HINTS - 1);
+        if (g_lookup_stats) lookup_count(kind, t, a, t->hint[h], 1);
+        best = span_best(t->s, t->seg, t->nseg, a, b, &t->hint[h]);
+    }
     if (!best) return 0;
     *buf = best->buf; *off = best->off + (a - best->lo); if (avail) *avail = best->end - a;
     return 1;
@@ -1403,6 +1566,7 @@ static int record_resolve_inner(const vk_record_spans *s, uint64_t a, uint64_t n
     if (a + n < a) return 0;
     const span_t *best = NULL;
     if (s->linear) { for (int i = 0; i < s->count; i++) if (s->span[i].lo <= a && s->span[i].end >= a + n) { best = &s->span[i]; break; } }
+    else if (ktglmemo_nvn_on()) { best = span_best_fast(s->span, s->segment, s->segments, a, a + n, hints, NULL); }
     else { unsigned h = (unsigned)((a >> 12) ^ (a >> 24)) & 63u; best = span_best(s->span, s->segment, s->segments, a, a + n, hints ? &hints[h] : NULL); }
     if (!best) return 0;
     *b = best->buf; *o = best->off + a - best->lo; if (available) *available = best->end - a; return 1;
@@ -1413,14 +1577,83 @@ int vk_record_resolve(const vk_record_spans *s, uint64_t a, uint64_t n, VkBuffer
 int vk_resolve_for(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off, uint64_t *avail, int kind) { return VK_REC_VALUE(VK_REC_RESOLVE, resolve_local(addr, len, buf, off, avail, kind)); }
 int vk_resolve_span(uint64_t addr, VkBuffer *buf, uint64_t *off, uint64_t *avail) { return vk_resolve_for(addr, 1, buf, off, avail, VK_LOOKUP_OTHER); }
 int vk_resolve(uint64_t addr, uint64_t len, VkBuffer *buf, uint64_t *off) { return vk_resolve_for(addr, len, buf, off, NULL, VK_LOOKUP_OTHER); }
+uint64_t vk_span_gen(void) { return atomic_load_explicit(&g_span_gen, memory_order_acquire); }
+int vk_lookup_stats_on(void) { return g_lookup_stats; }
+static uint64_t lag_va_threshold(uint64_t addr, uint64_t physical, uint64_t edge) {
+    if (edge <= physical) { uint64_t d = physical - edge; return d <= addr ? addr - d : 0; }
+    uint64_t d = edge - physical;
+    return d <= UINT64_MAX - addr ? addr + d : UINT64_MAX;
+}
+static totk_lag_iv_idx_t *g_lag_iv_idx;
+static int lag_iv_idx_sync_locked(uint64_t gen) {
+    if (g_nalias > (int)TOTK_LAG_IV_MAX_ALIAS || g_npool > (int)TOTK_LAG_IV_MAX_POOL) return 0;
+    if (!g_lag_iv_idx) g_lag_iv_idx = calloc(1, sizeof *g_lag_iv_idx);
+    if (!g_lag_iv_idx) return 0;
+    if (g_lag_iv_idx->ready && g_lag_iv_idx->gen == gen && g_lag_iv_idx->n_alias == (uint32_t)g_nalias && g_lag_iv_idx->n_pool_raw == (uint32_t)g_npool) return 1;
+    totk_lag_iv_begin(g_lag_iv_idx, gen, (uint32_t)g_npool);
+    for (int i = 0; i < g_nalias; i++) {
+        const alias_ent *al = &g_alias[i];
+        g_lag_iv_idx->aliases[g_lag_iv_idx->n_alias++] = (totk_lag_iv_alias_t){al->va, al->end, (uint64_t)al->owner->base + al->off};
+    }
+    for (int i = 0; i < g_npool; i++) {
+        const pool_ent *p = g_pools[i];
+        if ((p->kind == K_OWN || p->kind == K_VIEW) && p->hi > p->lo)
+            g_lag_iv_idx->pools[g_lag_iv_idx->n_pool++] = (totk_lag_iv_pool_t){p->lo, p->hi};
+    }
+    totk_lag_iv_finish(g_lag_iv_idx);
+    return g_lag_iv_idx->ready != 0u;
+}
+static void lag_iv_scan(uint64_t addr, uint64_t *iv_lo_out, uint64_t *iv_hi_out, uint64_t *end_va_out, uint8_t *bounded_out) {
+    uint64_t sgen = atomic_load_explicit(&g_span_gen, memory_order_relaxed);
+    if (totk_vk_ub_gw_fast_on() && lag_iv_idx_sync_locked(sgen)) { totk_lag_iv_query(g_lag_iv_idx, addr, iv_lo_out, iv_hi_out, end_va_out, bounded_out); return; }
+    uint64_t iv_lo = 0, iv_hi = UINT64_MAX, physical = addr, end_va = UINT64_MAX;
+    uint8_t bounded = 0;
+    for (int i = 0; i < g_nalias; i++) {
+        uint64_t va = g_alias[i].va, end = g_alias[i].end;
+        if (addr >= va && addr < end) {
+            if (va > iv_lo) iv_lo = va;
+            if (end < iv_hi) iv_hi = end;
+            physical = g_alias[i].owner->base + g_alias[i].off + (addr - va);
+            end_va = end; bounded = 1; break;
+        }
+        if (end <= addr) { if (end > iv_lo) iv_lo = end; }
+        else if (va > addr && va < iv_hi) iv_hi = va;
+    }
+    for (int i = 0; i < g_npool; i++) {
+        const pool_ent *p = g_pools[i];
+        if ((p->kind != K_OWN && p->kind != K_VIEW) || p->hi <= p->lo) continue;
+        if (p->hi <= physical) { uint64_t t = lag_va_threshold(addr, physical, p->hi); if (t > iv_lo) iv_lo = t; }
+        else if (p->lo > physical) { uint64_t t = lag_va_threshold(addr, physical, p->lo); if (t < iv_hi) iv_hi = t; }
+        else {
+            uint64_t tlo = lag_va_threshold(addr, physical, p->lo);
+            uint64_t thi = lag_va_threshold(addr, physical, p->hi);
+            if (tlo > iv_lo) iv_lo = tlo;
+            if (thi < iv_hi) iv_hi = thi;
+            if (!bounded || thi < end_va) { end_va = thi; bounded = 1; }
+        }
+    }
+    *iv_lo_out = iv_lo; *iv_hi_out = iv_hi; *end_va_out = end_va; *bounded_out = bounded;
+}
 uint64_t vk_lag_bound(uint64_t addr, uint64_t limit) {
+    static __thread vk_lag_iv_cache T_lag_iv;
     enum { NB = 1024 };
     static struct { uint64_t addr, gen, bound; } cache[NB];
-    uint64_t gen = atomic_load_explicit(&g_span_gen, memory_order_acquire);
+    uint64_t gen = atomic_load_explicit(&g_span_gen, memory_order_acquire), bound = UINT64_MAX;
+    if (ktglmemo_nvn_on()) {
+        if (vk_lag_iv_get(&T_lag_iv, gen, addr, &bound)) return limit < bound ? limit : bound;
+        uint64_t iv_lo = 0, iv_hi = 0, end_va = UINT64_MAX; uint8_t bounded = 0;
+        pthread_mutex_lock(&g_pool_mu);
+        lag_iv_scan(addr, &iv_lo, &iv_hi, &end_va, &bounded);
+        gen = atomic_load_explicit(&g_span_gen, memory_order_relaxed);
+        pthread_mutex_unlock(&g_pool_mu);
+        if (iv_lo <= addr && addr < iv_hi) vk_lag_iv_put(&T_lag_iv, gen, iv_lo, iv_hi, end_va, bounded);
+        bound = bounded ? (end_va - addr) : UINT64_MAX;
+        return limit < bound ? limit : bound;
+    }
     unsigned h = (unsigned)((addr >> 4) ^ (addr >> 20)) % NB;
     if (cache[h].addr == addr && cache[h].gen == gen) return limit < cache[h].bound ? limit : cache[h].bound;
     pthread_mutex_lock(&g_pool_mu);
-    uint64_t physical = addr, bound = UINT64_MAX;
+    uint64_t physical = addr;
     for (int i = 0; i < g_nalias; i++) if (addr >= g_alias[i].va && addr < g_alias[i].end) {
         physical = g_alias[i].owner->base + g_alias[i].off + addr - g_alias[i].va;
         bound = g_alias[i].end - addr; break;
@@ -1456,7 +1689,7 @@ typedef struct occl_node { struct occl_node *prev; uint64_t total; unsigned refs
 typedef struct occl_page { struct occl_page *next; VkQueryPool qp; uint32_t used; occl_node *node[OQ]; } occl_page;
 typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr, type, cval; uint32_t tsq1; occl_node *occl; uint64_t report_ticks, report_origin; } post_op;   /* 1 event, 2 counter; cval fixed at recording, tsq1: timestamp query + 1; report provenance staged until g_mu publication */
 typedef struct { VkBuffer buf; VkDeviceMemory mem; uint8_t *ptr; VkDeviceSize size, used; } chunk_t;
-typedef struct { chunk_t *chunks; int nchunk, capchunk; VkDeviceSize min, reserve; } arena_t;   /* host-visible bump allocator; min: chunk size (0: 8 MiB), reserve: compacted high-water */
+typedef struct { chunk_t *chunks; int nchunk, capchunk; VkDeviceSize min, reserve; totk_arena_buf_map_t bmap; } arena_t;   /* host-visible bump allocator; min: chunk size (0: 8 MiB), reserve: compacted high-water */
 static uint64_t arena_compact_ns[2], arena_compacts[2]; /* walking only: slot / snapshot */
 #define RING 8
 typedef struct {
@@ -1487,6 +1720,7 @@ static void chunk_release(chunk_t *c, vk_memory_purpose purpose) {
 static void arena_release(arena_t *a) {
     for (int i = 0; i < a->nchunk; i++) chunk_release(&a->chunks[i], a->min ? VK_MEMORY_SNAPSHOT : VK_MEMORY_SLOT);
     a->nchunk = 0; a->reserve = 0;
+    totk_arena_bmap_clear(&a->bmap);
 }
 /* Only called after the arena's last GPU fence AND CPU recording ownership
    have retired. Retain byte capacity, but collapse fragmented BO high-water
@@ -1536,6 +1770,8 @@ static void arena_retain_cap(arena_t *a) {   /* a slot arena just reset: no chun
     }
     a->nchunk = n;
     if (trimmed) {
+        totk_arena_bmap_clear(&a->bmap);
+        for (int i = 0; i < a->nchunk; i++) totk_arena_bmap_put(&a->bmap, (uint64_t)(uintptr_t)a->chunks[i].buf, i);
         atomic_fetch_add_explicit(&g_staging_trims, 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&g_staging_trimmed, trimmed, memory_order_relaxed);
     }
@@ -1577,9 +1813,15 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g
  * residence, AFTER CPU posts/publication prerequisites, at g_done availability.
  * This is a CPU observation, not the GPU's hardware signal timestamp. */
 enum { PRESENT_READY_HISTORY = 1024 };
+static uint32_t g_cv_waiters;
+static totk_present_ready_ring g_present_ready_fast;
+static void nvn_cv_wait(void) { g_cv_waiters++; pthread_cond_wait(&g_cv, &g_mu); g_cv_waiters--; }
+static int nvn_cv_timedwait(const struct timespec *dl) { g_cv_waiters++; int rc = pthread_cond_timedwait(&g_cv, &g_mu, dl); g_cv_waiters--; return rc; }
+static void nvn_cv_wake(void) { if (totk_cv_should_wake(g_cv_waiters, totk_vk_post_fast_on(), 0)) pthread_cond_broadcast(&g_cv); }
 static struct { uint64_t ticket, ready_ns; } g_present_ready[PRESENT_READY_HISTORY];
 uint64_t vk_present_ready_ns(uint64_t ticket) {
     if (!ticket) return 0;
+    if (totk_vk_post_fast_on()) return totk_present_ready_read(&g_present_ready_fast, ticket, 0);
     pthread_mutex_lock(&g_mu);
     unsigned index = (unsigned)(ticket % PRESENT_READY_HISTORY);
     uint64_t ready = g_present_ready[index].ticket == ticket ? g_present_ready[index].ready_ns : 0;
@@ -1950,34 +2192,64 @@ enum { CPEND_N = 4096 };
 static struct cpend_ent { uint64_t addr, val; int known; } *g_cpend;
 static unsigned g_cpend_cap, g_cpend_head, g_cpend_tail;
 static pthread_mutex_t g_cpend_mu = PTHREAD_MUTEX_INITIALIZER;
+static totk_cpend_fast_t g_cpend_fast;
 static void cpend_push(uint64_t addr, uint64_t val, int known) {
     pthread_mutex_lock(&g_cpend_mu);
-    if (g_cpend_head - g_cpend_tail == g_cpend_cap) {   /* never discard an unknown report and accidentally read stale memory */
+    if (g_cpend_head - g_cpend_tail == g_cpend_cap) {
         unsigned cap = g_cpend_cap ? 2 * g_cpend_cap : CPEND_N;
         struct cpend_ent *p = malloc((size_t)cap * sizeof *p); if (!p) DIE("pending counter allocation");
         for (unsigned i = g_cpend_tail; i != g_cpend_head; i++) p[i % cap] = g_cpend[i % g_cpend_cap];
         free(g_cpend); g_cpend = p; g_cpend_cap = cap;
     }
     g_cpend[g_cpend_head++ % g_cpend_cap] = (struct cpend_ent){addr, val, known};
+    totk_cpend_fast_push(&g_cpend_fast, addr, val, known);
     pthread_mutex_unlock(&g_cpend_mu);
 }
-static void cpend_pop(uint64_t addr) {   /* the oldest pending report is now in memory */
+static void cpend_pop(uint64_t addr) {
     pthread_mutex_lock(&g_cpend_mu);
-    if (g_cpend_tail != g_cpend_head && g_cpend[g_cpend_tail % g_cpend_cap].addr == addr) g_cpend_tail++;
+    if (g_cpend_tail != g_cpend_head && g_cpend[g_cpend_tail % g_cpend_cap].addr == addr) {
+        g_cpend_tail++;
+        totk_cpend_fast_pop(&g_cpend_fast, g_cpend_tail == g_cpend_head);
+    }
     pthread_mutex_unlock(&g_cpend_mu);
 }
-int vk_counter_value(uint64_t addr, uint64_t *value) {   /* 0: pending real samples, whose GPU value is not known yet */
-    static int ordered = -1; if (ordered < 0) ordered = !vk_off("condorder");
-    if (!ordered) { memcpy(value, (const void *)(uintptr_t)addr, 8); return 1; }
+static int cpend_ordered(void) { static int o = -1; if (o < 0) o = !vk_off("condorder"); return o; }
+static int cpend_lookup_locked(uint64_t addr, uint64_t *value) {
     int found = 0, known = 1; *value = 0;
-    pthread_mutex_lock(&g_cpend_mu);
     for (unsigned i = g_cpend_head; i != g_cpend_tail && !found; i--) if (g_cpend[(i - 1) % g_cpend_cap].addr == addr) {
         const struct cpend_ent *p = &g_cpend[(i - 1) % g_cpend_cap]; *value = p->val; known = p->known; found = 1;
     }
     if (!found) memcpy(value, (const void *)(uintptr_t)addr, 8);
-    pthread_mutex_unlock(&g_cpend_mu);
+    return known;
+}
+int vk_counter_value(uint64_t addr, uint64_t *value) {
+    if (!cpend_ordered()) { memcpy(value, (const void *)(uintptr_t)addr, 8); return 1; }
+    if (subcap_fast_nvn_on()) {
+        int f = 0, kn = 1; uint64_t v = 0u;
+        if (totk_cpend_fast_lookup(&g_cpend_fast, addr, &f, &v, &kn) == 0) {
+            if (f) *value = v; else memcpy(value, (const void *)(uintptr_t)addr, 8);
+            if (!kn) g_occl_unknown++;
+            return kn;
+        }
+    }
+    pthread_mutex_lock(&g_cpend_mu); int known = cpend_lookup_locked(addr, value); pthread_mutex_unlock(&g_cpend_mu);
     if (!known) g_occl_unknown++;
     return known;
+}
+int vk_counter_pair(uint64_t addr0, uint64_t addr1, uint64_t *v0, uint64_t *v1) {
+    if (!cpend_ordered()) { memcpy(v0, (const void *)(uintptr_t)addr0, 8); memcpy(v1, (const void *)(uintptr_t)addr1, 8); return 1; }
+    if (subcap_fast_nvn_on()) {
+        int f[2], kn[2]; uint64_t pv[2];
+        if (totk_cpend_fast_pair(&g_cpend_fast, addr0, addr1, f, pv, kn) == 0) {
+            if (f[0]) *v0 = pv[0]; else memcpy(v0, (const void *)(uintptr_t)addr0, 8);
+            if (f[1]) *v1 = pv[1]; else memcpy(v1, (const void *)(uintptr_t)addr1, 8);
+            g_occl_unknown += (uint64_t)(!kn[0]) + (uint64_t)(!kn[1]);
+            return kn[0] & kn[1];
+        }
+    }
+    pthread_mutex_lock(&g_cpend_mu); int k0 = cpend_lookup_locked(addr0, v0), k1 = cpend_lookup_locked(addr1, v1); pthread_mutex_unlock(&g_cpend_mu);
+    g_occl_unknown += (uint64_t)(!k0) + (uint64_t)(!k1);
+    return k0 & k1;
 }
 static void apply_posts(slot_t *owner, const vk_gpu_time_slot *last_slot, int last_valid) {
     post_op *p = owner->post; int n = owner->npost;
@@ -2077,125 +2349,120 @@ static void *gpu_guard_thread(void *unused) {
         nvn_dirty_lag_complete(s->value);
         pthread_mutex_lock(&g_mu);
         g_gpu_head++;
-        pthread_cond_broadcast(&g_cv);
+        nvn_cv_wake();
         pthread_mutex_unlock(&g_mu);
     }
     return NULL;
 }
+static void completion_read_ts(
+        slot_t *s, uint64_t *gpu_ns_out, double *fg_ms_out, int *fg_ok_out, uint64_t *rs_out, uint64_t *re_out, int *tv_out) {
+    uint64_t t[2];
+    if (vkGetQueryPoolResults(V.dev, s->ts, 0, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT)) return;
+    if (t[1] > t[0]) {
+        uint64_t gpu_ns = (uint64_t)((double)(t[1] - t[0]) * V.props.limits.timestampPeriod);
+        *gpu_ns_out = gpu_ns;
+        atomic_fetch_add(&g_perf_gpu_ns, gpu_ns);
+        vk_pipeline_keys_pressure(host_now_ns(), gpu_ns > 25000000);
+    }
+    uint64_t pre = t[0]; int pre_valid = 1;
+    int framegen = vk_fg_enabled() && vk_fg_interpolating();
+    if (s->pre_open && (g_gpu_time_hardware || framegen))
+        pre_valid = vkGetQueryPoolResults(V.dev, s->ts, 2, 1, sizeof pre, &pre, sizeof pre, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+    if (framegen && pre_valid && V.timestamp_bits && V.props.limits.timestampPeriod > 0) {
+        uint64_t mask = V.timestamp_bits >= 64 ? UINT64_MAX : (UINT64_C(1) << V.timestamp_bits) - 1;
+        *fg_ms_out = (double)((t[1] - pre) & mask) * V.props.limits.timestampPeriod / 1e6;
+        *fg_ok_out = 1;
+    }
+    if (g_gpu_time_hardware && g_ts_clock_valid) {
+        *rs_out = guest_clock_ticks_to_ns(vk_timestamp_ticks(t[0], g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
+        *re_out = guest_clock_ticks_to_ns(vk_timestamp_ticks(t[1], g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
+        *tv_out = (*re_out >= *rs_out);
+        if (s->pre_open) {
+            if (pre_valid) *rs_out = guest_clock_ticks_to_ns(vk_timestamp_ticks(pre, g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
+            else *tv_out = 0;
+        }
+        *tv_out &= (*re_out >= *rs_out);
+    }
+}
+static void completion_slot_finish(slot_t *s, uint64_t gpu_ns, double fg_ms, int fg_ok, uint64_t rs, uint64_t re, int tv) {
+    if (vk_fg_enabled() && vk_fg_interpolating()) vk_fg_gpu_sample(s->value, fg_ms, fg_ok);
+    totk_perf_gpu(s->guest_frame, gpu_ns);
+    if (s->ft_frame && totk_ft_on()) totk_ft_slot_gpu(s->ft_frame, s->value, s->ft_gpu_done, gpu_ns);
+    occl_complete(s);
+    if (vk_gpuprof_on) vk_gpuprof_slot_complete(&s->gpuprof);
+    if (!tv) gpu_time_unavailable(s->guest_frame, "slot GPU bracket unavailable");
+    vk_gpu_time_slot timing = {.guest_ns = s->guest_submit_ns, .raw_start_ns = rs, .raw_end_ns = re};
+    if (g_gpu_time_hardware && tv && !g_gpu_time_uncertain)
+        timing = vk_gpu_time_begin(&g_gpu_time_queue, s->guest_submit_ns, rs, re);
+    for (uint32_t i = 0; i < s->tsq_count; i++) {
+        unsigned q = (s->tsq_first + i) % TSQ;
+        g_tsq_time[q].origin_ticks = s->guest_origin_ticks;
+        if (g_gpu_time_hardware) {
+            g_tsq_time[q].slot = timing; g_tsq_time[q].frame = s->guest_frame;
+            g_tsq_time[q].valid = tv && !g_gpu_time_uncertain;
+            g_tsq_time[q].clock_gpu = g_ts_gpu_sample; g_tsq_time[q].clock_guest = g_ts_host_sample;
+        }
+    }
+    if (s->guest_frame && s->queue_ns >= s->guest_submit_ns) {
+        g_gpu_time_stats[GT_SLOTS]++;
+        g_gpu_time_stats[GT_SUBMIT_DELAY] += s->queue_ns - s->guest_submit_ns;
+    }
+    apply_posts(s, &timing, tv);
+}
+static void completion_publish(slot_t *s, uint64_t t1, int track_ready) {
+    pthread_mutex_lock(&g_mu);
+#ifdef TOTK_VK_TESTS
+    if (g_test_completion_hold == s->value) {
+        atomic_store_explicit(&g_test_completion_held, s->value, memory_order_release);
+        nvn_cv_wake();
+        while (g_test_completion_hold == s->value) nvn_cv_wait();
+        atomic_store_explicit(&g_test_completion_held, 0, memory_order_release);
+    }
+#endif
+    if (g_gpu_time_hardware) for (int i = 0; i < s->npost; i++) {
+        const post_op *p = &s->post[i];
+        if (p->kind == 2 && p->type == NVN_COUNTER_TYPE_TIMESTAMP)
+            vk_gpu_time_sample_publish(&g_gpu_time_samples, p->addr, p->report_ticks, p->report_origin);
+    }
+    memcpy(g_gpu_time_published, g_gpu_time_stats, sizeof g_gpu_time_published);
+    if (s->ft_frame && totk_ft_on()) totk_ff_ticket_publish(s->value, totk_ft_now(), (unsigned)s->npost);
+    s->npost = 0; s->busy = 0; g_qhead++;
+    if (!s->submit_busy && !replay_until((unsigned)(s - g_ring))) vk_record_slot_retire((unsigned)(s - g_ring));
+    atomic_store(&g_done, s->value);
+    replay_retire(s->value);
+    if (track_ready) {
+        uint64_t rns = host_now_ns();
+        unsigned index = (unsigned)(s->value % PRESENT_READY_HISTORY);
+        g_present_ready[index].ticket = s->value;
+        g_present_ready[index].ready_ns = rns;
+        totk_present_ready_note(&g_present_ready_fast, s->value, rns);
+    }
+    if (g_hitch_on) { g_done_at = host_now_ns(); HK_ADD(comp_ns, g_done_at - t1); }
+    nvn_cv_wake();
+    pthread_mutex_unlock(&g_mu);
+}
 static void *completion_thread(void *arg) {
-    (void)arg;
-    totk_thread_start("totk-post", NULL);
-    nvn_dirty_lag_thread_role("completion-post");
+    (void)arg; totk_thread_start("totk-post", NULL); nvn_dirty_lag_thread_role("completion-post");
     for (;;) {
         pthread_mutex_lock(&g_mu);
-        /* The GPU-only cursor's existence is immutable, even after capture is disabled at runtime.
-           It must pass a slot before posts release that slot for reuse. */
-        if (g_lag_wait == 1) { while (g_qhead == g_qtail || g_gpu_head == g_qhead) pthread_cond_wait(&g_cv, &g_mu); }
+        if (g_lag_wait == 1) { while (g_qhead == g_qtail || g_gpu_head == g_qhead) nvn_cv_wait(); }
         else while (g_qhead == g_qtail) pthread_cond_wait(&g_cv_work, &g_mu);
         slot_t *s = g_queue_[g_qhead % RING];
-        while (g_ub_publication == s->value) pthread_cond_wait(&g_cv, &g_mu);
+        while (g_ub_publication == s->value) nvn_cv_wait();
         pthread_mutex_unlock(&g_mu);
         totk_live_slack_tick();
         if (g_lag_wait != 1) {
             gpu_wait_slot(s);
             if (s->ft_frame && totk_ft_on()) s->ft_gpu_done = totk_ft_now();
         }
-        uint64_t t1 = g_hitch_on ? host_now_ns() : 0;   /* observed GPU completion handoff, not the driver's actual signal time */
-        uint64_t gpu_ns = 0;
-        int framegen=vk_fg_enabled() && vk_fg_interpolating(), framegen_valid=0;
-        double framegen_ms=0;
+        uint64_t t1 = g_hitch_on ? host_now_ns() : 0, gpu_ns = 0, rs = 0, re = 0;
+        double fg_ms = 0; int fg_ok = 0, tv = 0;
         if (g_ts_on > 0 || g_gpu_time_hardware) ts_calibrate();
-        uint64_t raw_start_ns = 0, raw_end_ns = 0; int timing_valid = 0;
-        if (s->ts_on) {
-            uint64_t t[2];
-            if (!vkGetQueryPoolResults(V.dev, s->ts, 0, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT)) {
-                if (t[1] > t[0]) {
-                    gpu_ns = (uint64_t)((double)(t[1] - t[0]) * V.props.limits.timestampPeriod);
-                    atomic_fetch_add(&g_perf_gpu_ns, gpu_ns);
-                    vk_pipeline_keys_pressure(host_now_ns(), gpu_ns > 25000000);
-                }
-                /* Reuse this slot's existing bracket. Pre uploads execute before
-                   all main primaries; include them in headroom, not host waits. */
-                uint64_t pre=t[0];
-                int pre_valid=1;
-                if (s->pre_open && (g_gpu_time_hardware || framegen))
-                    pre_valid=vkGetQueryPoolResults(V.dev,s->ts,2,1,sizeof pre,&pre,sizeof pre,VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
-                if (framegen && pre_valid && V.timestamp_bits && V.props.limits.timestampPeriod > 0) {
-                    uint64_t mask=V.timestamp_bits >= 64 ? UINT64_MAX : (UINT64_C(1) << V.timestamp_bits)-1;
-                    framegen_ms=(double)((t[1]-pre) & mask)*V.props.limits.timestampPeriod/1e6;
-                    framegen_valid=1;
-                }
-                if (g_gpu_time_hardware && g_ts_clock_valid) {
-                    raw_start_ns = guest_clock_ticks_to_ns(vk_timestamp_ticks(t[0], g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
-                    raw_end_ns = guest_clock_ticks_to_ns(vk_timestamp_ticks(t[1], g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
-                    timing_valid = raw_end_ns >= raw_start_ns;
-                    if (g_gpu_time_hardware && s->pre_open) {
-                        if (pre_valid)
-                            raw_start_ns = guest_clock_ticks_to_ns(vk_timestamp_ticks(pre, g_ts_gpu_sample, g_ts_host_sample, V.props.limits.timestampPeriod, V.timestamp_bits));
-                        else timing_valid = 0;
-                    }
-                    timing_valid &= raw_end_ns >= raw_start_ns;
-                }
-            }
-        }
-        if (framegen) vk_fg_gpu_sample(s->value,framegen_ms,framegen_valid);
-        totk_perf_gpu(s->guest_frame, gpu_ns);   /* TOTK_ADPF_GPU: per guest frame, in completion order */
-        /* The guard cursor publishes its fence observation under g_mu before we can reach this slot.
-           Report before CPU post ops: their completion is not GPU finish. gpu_ns covers main buffers, not pre. */
-        if (s->ft_frame && totk_ft_on()) totk_ft_slot_gpu(s->ft_frame, s->value, s->ft_gpu_done, gpu_ns);
-        occl_complete(s);
-        if (vk_gpuprof_on) vk_gpuprof_slot_complete(&s->gpuprof);
-        if (!timing_valid) gpu_time_unavailable(s->guest_frame, "slot GPU bracket unavailable");
-        vk_gpu_time_slot timing = {.guest_ns = s->guest_submit_ns, .raw_start_ns = raw_start_ns, .raw_end_ns = raw_end_ns};
-        if (g_gpu_time_hardware && timing_valid && !g_gpu_time_uncertain)
-            timing = vk_gpu_time_begin(&g_gpu_time_queue, s->guest_submit_ns, raw_start_ns, raw_end_ns);
-        for (uint32_t i = 0; i < s->tsq_count; i++) {
-            unsigned q = (s->tsq_first + i) % TSQ;
-            g_tsq_time[q].origin_ticks = s->guest_origin_ticks;
-            if (g_gpu_time_hardware) {
-                g_tsq_time[q].slot = timing; g_tsq_time[q].frame = s->guest_frame;
-                g_tsq_time[q].valid = timing_valid && !g_gpu_time_uncertain;
-                g_tsq_time[q].clock_gpu = g_ts_gpu_sample; g_tsq_time[q].clock_guest = g_ts_host_sample;
-            }
-        }
-        if (s->guest_frame && s->queue_ns >= s->guest_submit_ns) {
-            g_gpu_time_stats[GT_SLOTS]++;
-            g_gpu_time_stats[GT_SUBMIT_DELAY] += s->queue_ns - s->guest_submit_ns;
-        }
-        apply_posts(s, &timing, timing_valid);
+        if (s->ts_on) completion_read_ts(s, &gpu_ns, &fg_ms, &fg_ok, &rs, &re, &tv);
+        completion_slot_finish(s, gpu_ns, fg_ms, fg_ok, rs, re, tv);
         int track_ready = runtime_android_predict_active() || runtime_android_fps_auto_active() ||
-                          vk_fg_enabled() || totk_ft_on(); /* never enter frontend under g_mu */
-        pthread_mutex_lock(&g_mu);
-#ifdef TOTK_VK_TESTS
-        if (g_test_completion_hold==s->value) {
-            atomic_store_explicit(&g_test_completion_held,s->value,memory_order_release);
-            pthread_cond_broadcast(&g_cv);
-            while (g_test_completion_hold==s->value) pthread_cond_wait(&g_cv,&g_mu);
-            atomic_store_explicit(&g_test_completion_held,0,memory_order_release);
-        }
-#endif
-        if (g_gpu_time_hardware) for (int i = 0; i < s->npost; i++) {
-            const post_op *p = &s->post[i];
-            if (p->kind == 2 && p->type == NVN_COUNTER_TYPE_TIMESTAMP)
-                vk_gpu_time_sample_publish(&g_gpu_time_samples, p->addr, p->report_ticks, p->report_origin);
-        }
-        memcpy(g_gpu_time_published, g_gpu_time_stats, sizeof g_gpu_time_published);
-        /* Posts and the UBO-publication gate have passed. Keep slot ownership
-           under g_mu until this pre-done-store anchor and g_done are published;
-           neither timestamp is a manual NVN signal or a hardware signal time. */
-        if (s->ft_frame && totk_ft_on()) totk_ff_ticket_publish(s->value, totk_ft_now(), (unsigned)s->npost);
-        s->npost = 0; s->busy = 0; g_qhead++;
-        if (!s->submit_busy && !replay_until((unsigned)(s-g_ring))) vk_record_slot_retire((unsigned)(s-g_ring));
-        atomic_store(&g_done, s->value);
-        replay_retire(s->value);
-        if (track_ready) {
-            unsigned index = (unsigned)(s->value % PRESENT_READY_HISTORY);
-            g_present_ready[index].ticket = s->value;
-            g_present_ready[index].ready_ns = host_now_ns();
-        }
-        if (g_hitch_on) { g_done_at = host_now_ns(); HK_ADD(comp_ns, g_done_at - t1); }
-        pthread_cond_broadcast(&g_cv);
-        pthread_mutex_unlock(&g_mu);
+                          vk_fg_enabled() || totk_ft_on();
+        completion_publish(s, t1, track_ready);
     }
     return NULL;
 }
@@ -2287,7 +2554,7 @@ void vk_submit_optional_cancel(void) {
     g_cur->busy=g_optional_next->busy=0;
     g_cur=g_optional_next=NULL;
     g_optional_immutable=0;
-    pthread_cond_broadcast(&g_cv);
+    nvn_cv_wake();
     pthread_mutex_unlock(&g_mu);
 }
 void vk_submit_adopt_primary(VkCommandBuffer closed) {
@@ -2312,7 +2579,7 @@ void vk_submit_optional_end(void) {
     pthread_mutex_lock(&g_mu);
     g_optional_next->busy=0; g_optional_next=NULL;
     g_optional_immutable=0;
-    pthread_cond_broadcast(&g_cv);
+    nvn_cv_wake();
     pthread_mutex_unlock(&g_mu);
 }
 static void slot_begin_inner(void) {
@@ -2337,7 +2604,7 @@ static void slot_begin_inner(void) {
             s=&g_ring[next]; g_ring_next=(next+1)%RING;
         }
         blocked=s->busy || s->submit_busy;
-        while (s->busy || s->submit_busy) pthread_cond_wait(&g_cv,&g_mu);
+        while (s->busy || s->submit_busy) nvn_cv_wait();
         s->busy=1; pthread_mutex_unlock(&g_mu));
     { uint64_t d = host_now_ns() - w0; g_perf_wait_ns += d; g_cum[1] += d;
       if (blocked && T_ft_walk_frame && totk_ft_on()) totk_ft_walk_wait(T_ft_walk_frame, d); }
@@ -2510,12 +2777,16 @@ VkCommandBuffer vk_pre_cb(void) {
 static void *arena_alloc(arena_t *a, size_t size, size_t align, VkBuffer *buf, VkDeviceSize *off) {
     if (!align) align = 16;
     chunk_t *c = a->nchunk ? &a->chunks[a->nchunk - 1] : NULL;
-    VkDeviceSize at = c ? (c->used + align - 1) / align * align : 0;
+    VkDeviceSize at = c ? (totk_ub_fast_on() ? (VkDeviceSize)totk_align_up_sz(c->used, align) : (c->used + align - 1) / align * align) : 0;
     if (!c || at + size > c->size) {
         /* a free chunk (all are reset when the arena is) is used before a new one is made */
         int found = -1;
         for (int i = 0; i < a->nchunk - 1 && found < 0; i++) if (!a->chunks[i].used && a->chunks[i].size >= size) found = i;
-        if (found >= 0) { chunk_t tmp = a->chunks[found]; a->chunks[found] = a->chunks[a->nchunk - 1]; a->chunks[a->nchunk - 1] = tmp; c = &a->chunks[a->nchunk - 1]; at = 0; }
+        if (found >= 0) {
+            int last = a->nchunk - 1; chunk_t tmp = a->chunks[found]; a->chunks[found] = a->chunks[last]; a->chunks[last] = tmp;
+            totk_arena_bmap_swap(&a->bmap, (uint64_t)(uintptr_t)a->chunks[found].buf, found, (uint64_t)(uintptr_t)a->chunks[last].buf, last);
+            c = &a->chunks[last]; at = 0;
+        }
         else {
             uint64_t compact_start = a->reserve ? host_now_ns() : 0;
             if (a->nchunk == a->capchunk) { a->capchunk = a->capchunk ? 2 * a->capchunk : 8; a->chunks = VK_REALLOC(a->chunks, (size_t)a->capchunk * sizeof *a->chunks); }
@@ -2538,6 +2809,7 @@ static void *arena_alloc(arena_t *a, size_t size, size_t align, VkBuffer *buf, V
             if (result) DIE("arena vkMapMemory failed: %d; allocation %llu bytes, memory type %d, %s arena",
                 result, (unsigned long long)req.size, t, a->min ? "snapshot" : "slot");
             at = 0;
+            totk_arena_bmap_put(&a->bmap, (uint64_t)(uintptr_t)c->buf, a->nchunk - 1);
             if (compact_start) arena_compact_ns[a->min != 0] += host_now_ns() - compact_start;
         }
     }
@@ -2661,7 +2933,7 @@ static void slot_queue(slot_t *s, int background) {
     if (s->publication) g_ub_publication = s->value;
     g_queue_[g_qtail++ % RING] = s; g_fence = s->value;
     if (!background) g_submit_done_value = s->value;
-    pthread_cond_signal(&g_cv_work); pthread_cond_broadcast(&g_cv);
+    pthread_cond_signal(&g_cv_work); nvn_cv_wake();
     pthread_mutex_unlock(&g_mu);
     /* GPU completion may clear busy immediately; the async owner's submit_busy pin still prevents reuse. */
 }
@@ -2695,8 +2967,8 @@ static void *submit_worker(void *unused) {
         pthread_mutex_lock(&g_mu);
         if (g_test_submit_hold == value) {
             atomic_store_explicit(&g_test_submit_held, value, memory_order_release);
-            pthread_cond_broadcast(&g_cv);
-            while (g_test_submit_hold == value) pthread_cond_wait(&g_cv, &g_mu);
+            nvn_cv_wake();
+            while (g_test_submit_hold == value) nvn_cv_wait();
             atomic_store_explicit(&g_test_submit_held, 0, memory_order_release);
         }
         pthread_mutex_unlock(&g_mu);
@@ -2705,7 +2977,7 @@ static void *submit_worker(void *unused) {
         s->submit_busy = 0; g_submit_done_value = value; g_sealed_head++;
         if (!s->busy && !replay_until(slot)) vk_record_slot_retire(slot);
         replay_retire(atomic_load(&g_done));
-        pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+        nvn_cv_wake(); pthread_mutex_unlock(&g_mu);
     }
     return NULL;
 }
@@ -2717,7 +2989,7 @@ static void submit_worker_start(void) {
 static void slot_handoff(slot_t *s) {
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, submit_worker_start);
     pthread_mutex_lock(&g_mu);
-    while (g_sealed_tail - g_sealed_head == RING) pthread_cond_wait(&g_cv, &g_mu);
+    while (g_sealed_tail - g_sealed_head == RING) nvn_cv_wait();
     g_sealed[g_sealed_tail++ % RING] = s; pthread_cond_signal(&g_sealed_cv);
     pthread_mutex_unlock(&g_mu); g_handoff_count++;
 }
@@ -2726,7 +2998,7 @@ static void submit_join(uint64_t value) {
     VK_REC_DO(VK_REC_O_WORKER_WAIT,
         pthread_mutex_lock(&g_mu);
         blocked = g_submit_done_value < value;
-        while (g_submit_done_value < value) pthread_cond_wait(&g_cv, &g_mu);
+        while (g_submit_done_value < value) nvn_cv_wait();
         pthread_mutex_unlock(&g_mu));
     uint64_t ns = host_now_ns() - start; g_submit_join_ns += ns; vk_record_walk_wait(ns);
     /* host_now_ns is CLOCK_MONOTONIC too; reuse this disjoint wait scope, not an enclosing CPU-step wait. */
@@ -2754,15 +3026,15 @@ void vk_slot_stats(uint64_t frame) {
 #ifdef TOTK_VK_TESTS
 int vk_record_test_async_submit(void) { return submit_async_on(); }
 void vk_record_test_submit_status(uint64_t *reserved, uint64_t *queued) {
-    pthread_mutex_lock(&g_mu); *reserved = g_reserved_fence; *queued = g_fence; pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_mu); *reserved = __atomic_load_n(&g_reserved_fence, __ATOMIC_ACQUIRE); *queued = g_fence; pthread_mutex_unlock(&g_mu);
 }
 void vk_record_test_hold_submit(uint64_t ticket) {
-    pthread_mutex_lock(&g_mu); g_test_submit_hold = ticket; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+    pthread_mutex_lock(&g_mu); g_test_submit_hold = ticket; nvn_cv_wake(); pthread_mutex_unlock(&g_mu);
 }
 uint64_t vk_record_test_submit_held(void) { return atomic_load_explicit(&g_test_submit_held, memory_order_acquire); }
 void vk_record_test_hold_completion(uint64_t ticket) {
     pthread_mutex_lock(&g_mu); g_test_completion_hold=ticket;
-    pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu);
+    nvn_cv_wake(); pthread_mutex_unlock(&g_mu);
 }
 uint64_t vk_record_test_completion_held(void) {
     return atomic_load_explicit(&g_test_completion_held,memory_order_acquire);
@@ -2802,46 +3074,20 @@ int vk_record_test_ticket_context(uint64_t ticket,uint64_t v[5]) {
     return found;
 }
 #endif
-static uint64_t slot_submit_inner(int with_posts, vk_pass_end_kind reason) {
-    const char *previous_role = nvn_dirty_lag_thread_role_get();
-    nvn_dirty_lag_thread_role("submit");
-    if (!g_cur) slot_begin();
-    int publish = with_posts && ub_private_on();
-    if (!ub_private_on()) ub_flush();
-    vk_end_rendering_at(reason, 0);
-    vk_wb_record();   /* settled copies share this ordinary slot, after the last pass and before sealing */
-    if (vk_one_primary_on) {
-        barrier_host(g_cur->cb);
-        if (g_cur->ts_on) vkCmdWriteTimestamp2(g_cur->cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, g_cur->ts, 1);
-        if (vk_gpuprof_on) vk_gpuprof_slot_end(g_cur->gpuprof, g_cur->cb);
-        vk_sections_seal();
-    }
-    vk_record_slot_seal((unsigned)(g_cur - g_ring));
-    totk_ft_count(FT_COUNT_CHUNKS, 1); /* one logical sealed slot, not each primary/secondary buffer */
-    int asynchronous = submit_async_on();
-    if (!asynchronous && g_submit_started) submit_join(g_reserved_fence);
-    if (!asynchronous) vk_record_assemble((unsigned)(g_cur - g_ring), 0);
-    VK_REC_DO(VK_REC_S_UNIFORM,
-        ub_seal(g_reserved_fence + 1);
-        gw_seal(g_reserved_fence + 1));
-    slot_t *s = g_cur; g_cur = NULL;
-    if (vk_gpuprof_on) vk_gpuprof_slot_seal(s->gpuprof);
-    /* Bind a preceding external split to this actual resource consumer before
-     * queue publication can complete either ticket. Its own GPU/CPU completion
-     * remains independent; only physical resource retirement is extended. */
-    if (atomic_load_explicit(&g_external_enabled,memory_order_acquire) && g_replay_pending && g_replay_pending!=s) {
+static void slot_submit_pins(slot_t *s, int with_posts) {
+    if (atomic_load_explicit(&g_external_enabled, memory_order_acquire) && g_replay_pending && g_replay_pending != s) {
         pthread_mutex_lock(&g_mu);
-        g_external[g_replay_pending-g_ring].until=g_reserved_fence+1;
-        g_replay_pending=NULL;
+        g_external[g_replay_pending - g_ring].until = g_reserved_fence + 1;
+        g_replay_pending = NULL;
         pthread_mutex_unlock(&g_mu);
-        if (!g_optional_immutable) snapshot_replay_pin(g_reserved_fence+1);
+        if (!g_optional_immutable) snapshot_replay_pin(g_reserved_fence + 1);
     }
     if (g_replay_releases) {
         pthread_mutex_lock(&g_mu);
-        for (unsigned i=0;i<RING;i++) if (g_replay_owner[i].pending) {
-            g_replay_owner[i].until=g_reserved_fence+1; g_replay_owner[i].pending=0;
+        for (unsigned i = 0; i < RING; i++) if (g_replay_owner[i].pending) {
+            g_replay_owner[i].until = g_reserved_fence + 1; g_replay_owner[i].pending = 0;
         }
-        g_replay_releases=0;
+        g_replay_releases = 0;
         pthread_mutex_unlock(&g_mu);
     }
     if (!vk_one_primary_on) {
@@ -2855,24 +3101,9 @@ static uint64_t slot_submit_inner(int with_posts, vk_pass_end_kind reason) {
         if (s->cap < g_ncarry) { s->cap = g_ncarry; s->post = VK_REALLOC(s->post, (size_t)s->cap * sizeof *s->post); }
         memcpy(s->post, g_carry, (size_t)g_ncarry * sizeof *g_carry); s->npost = g_ncarry; g_ncarry = 0;
     }
-    unsigned slot = (unsigned)(s - g_ring); uint64_t value = g_reserved_fence + 1;
-    s->native_lag = lag_wait_on() && vk_record_lag_native();
-    if (s->native_lag) lag_guard_seal(slot, value);
-    int untracked_wait = !asynchronous && lag_wait_on() ? lag_guard_submit(slot, value) : 0;
-    int join_required = with_posts || !g_in_sub || reason == VK_PASS_END_CPU_WAIT;
-    s->publication = publish; s->join_on_walk = join_required;
-    pthread_mutex_lock(&g_mu); s->value = ++g_reserved_fence; s->submit_busy = asynchronous; pthread_mutex_unlock(&g_mu);
-    if (vk_fg_lsfg_probe_requested())
-        vk_fg_lsfg_sealed(s->nprimary>1 ? s->primary : &s->cb,s->nprimary>1 ? s->nprimary : 1,s->value);
-    s->ft_frame = 0; s->ft_gpu_done = 0;
-    /* Backend-only work contributes GPU duration, never a late host-time floor. */
-    s->guest_submit_ns = g_in_sub || with_posts ? g_gpu_guest_ns : 0;
-    s->guest_origin_ticks = g_in_sub || with_posts ? g_gpu_origin_ticks : 0;
-    s->guest_frame = g_in_sub || with_posts ? g_gpu_guest_frame : 0;
-    if (totk_ft_on()) {
-        s->ft_frame = totk_ft_current();
-        totk_ft_slot_seal(s->ft_frame, s->value, totk_ft_now());
-    }
+}
+static void slot_submit_dispatch(
+        slot_t *s, int asynchronous, int publish, int join_required, int untracked_wait, int with_posts, vk_pass_end_kind reason, uint64_t value) {
     g_slot_count++; g_game_slot_count += with_posts || g_in_sub;
     if (asynchronous) slot_handoff(s);
     else {
@@ -2883,16 +3114,54 @@ static uint64_t slot_submit_inner(int with_posts, vk_pass_end_kind reason) {
     atomic_fetch_add(&g_seal_serial, 1);
     if (asynchronous && join_required) submit_join(value);
     if (publish) {
-        ub_publish();   /* QueueSubmit and worker join precede every host store and genuine-alias wait */
+        ub_publish();
         pthread_mutex_lock(&g_mu);
-        g_ub_publication = 0; pthread_cond_broadcast(&g_cv);
+        g_ub_publication = 0; nvn_cv_wake();
         pthread_mutex_unlock(&g_mu);
     }
     if (!asynchronous || with_posts || !g_in_sub || reason == VK_PASS_END_CPU_WAIT) {
-        /* Final publication precedes host stores; every failed earlier slot also retains its post-op frontier. */
         pthread_mutex_lock(&g_mu); uint64_t failed = g_fallback_value; pthread_mutex_unlock(&g_mu);
         if (failed > g_fallback_consumed && failed <= value) { wait_value(failed); g_fallback_consumed = failed; }
     }
+}
+static uint64_t slot_submit_inner(int with_posts, vk_pass_end_kind reason) {
+    const char *previous_role = nvn_dirty_lag_thread_role_get();
+    nvn_dirty_lag_thread_role("submit");
+    if (!g_cur) slot_begin();
+    int publish = with_posts && ub_private_on();
+    if (!ub_private_on()) ub_flush();
+    vk_end_rendering_at(reason, 0);
+    vk_wb_record();
+    if (vk_one_primary_on) {
+        barrier_host(g_cur->cb);
+        if (g_cur->ts_on) vkCmdWriteTimestamp2(g_cur->cb, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, g_cur->ts, 1);
+        if (vk_gpuprof_on) vk_gpuprof_slot_end(g_cur->gpuprof, g_cur->cb);
+        vk_sections_seal();
+    }
+    vk_record_slot_seal((unsigned)(g_cur - g_ring));
+    totk_ft_count(FT_COUNT_CHUNKS, 1);
+    int asynchronous = submit_async_on();
+    if (!asynchronous && g_submit_started) submit_join(g_reserved_fence);
+    if (!asynchronous) vk_record_assemble((unsigned)(g_cur - g_ring), 0);
+    VK_REC_DO(VK_REC_S_UNIFORM, ub_seal(g_reserved_fence + 1); gw_seal(g_reserved_fence + 1));
+    slot_t *s = g_cur; g_cur = NULL;
+    if (vk_gpuprof_on) vk_gpuprof_slot_seal(s->gpuprof);
+    slot_submit_pins(s, with_posts);
+    unsigned slot = (unsigned)(s - g_ring); uint64_t value = g_reserved_fence + 1;
+    s->native_lag = lag_wait_on() && vk_record_lag_native();
+    if (s->native_lag) lag_guard_seal(slot, value);
+    int untracked_wait = !asynchronous && lag_wait_on() ? lag_guard_submit(slot, value) : 0;
+    int join_required = with_posts || !g_in_sub || reason == VK_PASS_END_CPU_WAIT;
+    s->publication = publish; s->join_on_walk = join_required;
+    pthread_mutex_lock(&g_mu); uint64_t next_rf = __atomic_load_n(&g_reserved_fence, __ATOMIC_RELAXED) + 1; __atomic_store_n(&g_reserved_fence, next_rf, __ATOMIC_RELEASE); s->value = next_rf; s->submit_busy = asynchronous; pthread_mutex_unlock(&g_mu);
+    if (vk_fg_lsfg_probe_requested())
+        vk_fg_lsfg_sealed(s->nprimary > 1 ? s->primary : &s->cb, s->nprimary > 1 ? s->nprimary : 1, s->value);
+    s->ft_frame = 0; s->ft_gpu_done = 0;
+    s->guest_submit_ns = g_in_sub || with_posts ? g_gpu_guest_ns : 0;
+    s->guest_origin_ticks = g_in_sub || with_posts ? g_gpu_origin_ticks : 0;
+    s->guest_frame = g_in_sub || with_posts ? g_gpu_guest_frame : 0;
+    if (totk_ft_on()) { s->ft_frame = totk_ft_current(); totk_ft_slot_seal(s->ft_frame, s->value, totk_ft_now()); }
+    slot_submit_dispatch(s, asynchronous, publish, join_required, untracked_wait, with_posts, reason, value);
     nvn_dirty_lag_thread_role(previous_role);
     return value;
 }
@@ -2941,7 +3210,7 @@ int vk_replay_lease_end(uint64_t token,uint64_t covering_ticket) {
         g_replay_releases+=g_replay_owner[i].pending;
         g_replay_owner[i].until=g_replay_owner[i].pending ? UINT64_MAX : g_reserved_fence;
         replay_retire(atomic_load(&g_done));
-        pthread_cond_broadcast(&g_cv);
+        nvn_cv_wake();
         ended=1; break;
     }
     pthread_mutex_unlock(&g_mu);
@@ -2979,7 +3248,7 @@ static void wait_value_inner(uint64_t v) {
     if (v==UINT64_MAX) DIE("test invariant: open replay owner is not a submitted wait ticket");
     if (blocked) atomic_store_explicit(&g_test_wait_value, v, memory_order_release);
 #endif
-    while (atomic_load(&g_done) < v) pthread_cond_wait(&g_cv, &g_mu);
+    while (atomic_load(&g_done) < v) nvn_cv_wait();
     if (blocked && g_done_at) HK_ADD(wake_ns, host_now_ns() - g_done_at);
     pthread_mutex_unlock(&g_mu);
     { uint64_t d = host_now_ns() - w0; g_perf_wait_ns += d; g_cum[1] += d;
@@ -2987,7 +3256,7 @@ static void wait_value_inner(uint64_t v) {
 }
 static void wait_value(uint64_t v) { VK_REC_DO(VK_REC_O_GPU_WAIT, wait_value_inner(v)); }
 void vk_wait_fence(uint64_t ticket) { wait_value(ticket); } /* exact ticket, never a latest-submission/global idle */
-void vk_gpu_idle(void) { uint64_t v, t0 = g_hitch_on ? host_now_ns() : 0; pthread_mutex_lock(&g_mu); v = g_reserved_fence; pthread_mutex_unlock(&g_mu); wait_value(v); HK_ADD(idles, 1); HK_ADD(idle_ns, host_now_ns() - t0); }
+void vk_gpu_idle(void) { uint64_t v, t0 = g_hitch_on ? host_now_ns() : 0; if (img_fast_nvn_on()) v = __atomic_load_n(&g_reserved_fence, __ATOMIC_ACQUIRE); else { pthread_mutex_lock(&g_mu); v = g_reserved_fence; pthread_mutex_unlock(&g_mu); } wait_value(v); HK_ADD(idles, 1); HK_ADD(idle_ns, host_now_ns() - t0); }
 static void cpu_step_inner(void) { HK_ADD(cpu_steps, 1); g_stat_cpu_step++; g_cum[3]++; totk_ft_count(FT_COUNT_CPU_STEPS, 1); if (vk_rec_profile_on && T_rec.active) g_rec.cpu_steps++; ub_flush(); if (g_cur) wait_value(slot_submit(0, VK_PASS_END_CPU_WAIT)); else vk_gpu_idle(); }
 void vk_cpu_step(void) { VK_REC_DO(VK_REC_S, cpu_step_inner()); }
 
@@ -3147,7 +3416,7 @@ uint64_t vk_rec_service_call(vk_rec_service_fn function, void *arg) {
    reserved tickets before handing their immutable spans to those workers. */
 static int pool_gpu_quiet(void) {
     pthread_mutex_lock(&g_mu);
-    int quiet = atomic_load(&g_done) >= g_reserved_fence;
+    int quiet = atomic_load(&g_done) >= __atomic_load_n(&g_reserved_fence, __ATOMIC_ACQUIRE);
     pthread_mutex_unlock(&g_mu);
     return quiet;
 }
@@ -3182,7 +3451,7 @@ static uint64_t pool_wait_ticket(uint64_t ticket) {
     atomic_store_explicit(&g_test_wait_value, ticket, memory_order_release);
     if (T_pool_ticket) atomic_store_explicit(T_pool_ticket, ticket, memory_order_release);
 #endif
-    while (atomic_load(&g_done) < ticket) pthread_cond_wait(&g_cv, &g_mu);
+    while (atomic_load(&g_done) < ticket) nvn_cv_wait();
     pthread_mutex_unlock(&g_mu);
     uint64_t elapsed = g_pool_stats ? host_now_ns() - start : 0;
 #ifdef TOTK_VK_TESTS
@@ -3428,6 +3697,7 @@ void mtl_sub_copy(uint64_t src, uint64_t dst, uint64_t n) {
 typedef struct { uint64_t lo, hi, seq, fence; int flushed; uint8_t *data; } ub_ent;   /* fence: submission it reached memory in (0: not yet) */
 static uint64_t ub_address(uint64_t addr, uint64_t size);
 static ub_ent *g_ub; static uint64_t *g_ub_maxhi; static int g_nub, g_capub, g_ub_unflushed; static uint64_t g_ub_seq, g_ub_lo = UINT64_MAX, g_ub_hi;
+static totk_ub_unsealed_t g_ub_unsealed;
 static uint64_t g_ub_maxlen, g_ub_pruned_at;   /* longest logged entry (bounds the overlap scan); g_done at the last prune */
 static uint64_t g_ub_gen = 1;   /* rename memo: every log or snapshot change invalidates its answer */
 uint64_t vk_record_uniform_revision(void) { return g_ub_gen; }
@@ -3570,7 +3840,10 @@ static uint64_t lag_owner_base(VkBuffer buffer) {
     }
     uint64_t base = 0;
     pthread_mutex_lock(&g_pool_mu);
-    for (int i = 0; i < g_npool; i++)
+    if (totk_vk_bind_wb_fast_on() && g_npool <= 2048) {
+        pool_map_sync_locked();
+        base = totk_pool_map_find_buf(&g_pool_map, (uint64_t)(uintptr_t)buffer);
+    } else for (int i = 0; i < g_npool; i++)
         if (g_pools[i]->kind == K_OWN && g_pools[i]->buf == buffer) { base = g_pools[i]->base; break; }
     generation = atomic_load_explicit(&g_owner_gen, memory_order_relaxed);
     pthread_mutex_unlock(&g_pool_mu);
@@ -3634,7 +3907,8 @@ static int lag_test_owner_bench(void) {
 static uint64_t lag_physical(uint64_t addr, uint64_t size);
 static uint64_t ub_address(uint64_t addr, uint64_t size) { return ub_private_on() ? lag_physical(addr, size) : addr; }
 static void ub_maxhi_from(int i) { for (; i < g_nub; i++) { uint64_t prev = i ? g_ub_maxhi[i - 1] : 0; g_ub_maxhi[i] = g_ub[i].hi > prev ? g_ub[i].hi : prev; } }
-static uint64_t g_prune_floor = UINT64_MAX;
+static uint64_t g_prune_floor = UINT64_MAX, g_ub_max_fence, g_gw_max_fence;
+static uint64_t g_ub_min_fence = UINT64_MAX, g_gw_min_fence = UINT64_MAX;
 static void ub_prune_inner(void) {   /* drop entries whose submission the GPU has finished, and that no later snapshot still needs */
     /* Only a finished submission or a changed snapshot floor can drop entries; vk_ub_rename calls this for every uniform
        binding, so without either it returns at once. */
@@ -3642,13 +3916,19 @@ static void ub_prune_inner(void) {   /* drop entries whose submission the GPU ha
     if (done > g_prune_floor) done = g_prune_floor;   /* a submission queued after the one replaying captured no earlier than it */
     if (done == g_ub_pruned_at) return;
     g_ub_pruned_at = done;
-    g_ub_lo = UINT64_MAX; g_ub_hi = 0; g_ub_maxlen = 0;
+    if (totk_vk_copy_span_fast_on() && !totk_fence_can_prune(g_nub, g_ub_min_fence, done)) return;
+    g_ub_lo = UINT64_MAX; g_ub_hi = 0; g_ub_maxlen = 0; uint64_t mf = 0, minf = UINT64_MAX;
+    totk_ub_unsealed_reset(&g_ub_unsealed);
     for (int i = 0; i < g_nub; i++) {
         if (g_ub[i].fence && g_ub[i].fence <= done) { free(g_ub[i].data); continue; }
+        if (g_ub[i].flushed && !g_ub[i].fence) totk_ub_unsealed_note(&g_ub_unsealed, j);
+        if (g_ub[i].fence > mf) mf = g_ub[i].fence;
+        totk_fence_min_note(&minf, g_ub[i].fence);
         g_ub[j++] = g_ub[i];
         if (g_ub[i].lo < g_ub_lo) g_ub_lo = g_ub[i].lo; if (g_ub[i].hi > g_ub_hi) g_ub_hi = g_ub[i].hi;
         if (g_ub[i].hi - g_ub[i].lo > g_ub_maxlen) g_ub_maxlen = g_ub[i].hi - g_ub[i].lo;
     }
+    g_ub_max_fence = mf; g_ub_min_fence = minf;
     if (j != g_nub) { g_nub = j; ub_maxhi_from(0); ub_changed(0, 0); }
 }
 static void ub_prune(void) { VK_REC_DO(VK_REC_S_UNIFORM, ub_prune_inner()); }
@@ -3680,7 +3960,10 @@ static void ub_log(uint64_t lo, const uint8_t *data, uint64_t n, int flushed) {
     memmove(g_ub + a + 1, g_ub + a, (size_t)(g_nub - a) * sizeof *g_ub);
     uint8_t *d = reused ? reused : VK_MALLOC((size_t)n); memcpy(d, data, (size_t)n);
     if (vk_rec_profile_on && T_rec.active) { if (reused) g_rec.ub_reused++; else g_rec.ub_allocated++; }
-    g_ub[a] = (ub_ent){lo, lo + n, ++g_ub_seq, 0, flushed, d}; g_nub++; g_ub_unflushed += !flushed; ub_changed(lo, n);
+    g_ub[a] = (ub_ent){lo, lo + n, ++g_ub_seq, 0, flushed, d}; g_nub++; g_ub_unflushed += !flushed;
+    totk_ub_unsealed_shift_on_log(&g_ub_unsealed, first, a, g_nub);
+    if (flushed) totk_ub_unsealed_note(&g_ub_unsealed, a);
+    ub_changed(lo, n);
     snap_note_update(lo, n);
     ub_maxhi_from(a);
     if (lo < g_ub_lo) g_ub_lo = lo; if (lo + n > g_ub_hi) g_ub_hi = lo + n; if (n > g_ub_maxlen) g_ub_maxlen = n;
@@ -3693,7 +3976,8 @@ static int ub_overlaps(uint64_t lo, uint64_t hi, int only_unflushed, int *idx, i
     int a = 0, b = g_nub; while (a < b) { int m = (a + b) >> 1; if (g_ub[m].lo < hi) a = m + 1; else b = m; }
     int n = 0; uint64_t floor = lo > g_ub_maxlen ? lo - g_ub_maxlen : 0;   /* an entry starting at or below floor ends by lo */
     for (int i = a - 1; i >= 0 && g_ub_maxhi[i] > lo && (g_ub[i].lo > floor || !floor); i--) if (g_ub[i].hi > lo && (!only_unflushed || !g_ub[i].flushed)) { if (n == cap) return -1; idx[n++] = i; }
-    for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[idx[j - 1]].seq > g_ub[idx[j]].seq; j--) { int t = idx[j]; idx[j] = idx[j - 1]; idx[j - 1] = t; }
+    if (totk_vk_load_wb_fast_on() && n > 1) totk_ub_sort_by_seq(idx, n, g_ub, sizeof *g_ub, offsetof(ub_ent, seq));
+    else for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[idx[j - 1]].seq > g_ub[idx[j]].seq; j--) { int t = idx[j]; idx[j] = idx[j - 1]; idx[j - 1] = t; }
     return n;
 }
 static int ub_entry_cmp(const void *x, const void *y) {
@@ -3701,9 +3985,13 @@ static int ub_entry_cmp(const void *x, const void *y) {
     return a->lo < b->lo ? -1 : a->lo > b->lo;
 }
 static void ub_reindex(void) {
-    g_ub_lo = UINT64_MAX; g_ub_hi = g_ub_maxlen = 0; g_ub_unflushed = 0;
+    g_ub_lo = UINT64_MAX; g_ub_hi = g_ub_maxlen = 0; g_ub_unflushed = 0; g_ub_max_fence = 0; g_ub_min_fence = UINT64_MAX;
+    totk_ub_unsealed_reset(&g_ub_unsealed);
     for (int i = 0; i < g_nub; i++) {
         ub_ent *e = &g_ub[i];
+        if (e->flushed && !e->fence) totk_ub_unsealed_note(&g_ub_unsealed, i);
+        if (e->fence > g_ub_max_fence) g_ub_max_fence = e->fence;
+        totk_fence_min_note(&g_ub_min_fence, e->fence);
         if (e->lo < g_ub_lo) g_ub_lo = e->lo;
         if (e->hi > g_ub_hi) g_ub_hi = e->hi;
         if (e->hi - e->lo > g_ub_maxlen) g_ub_maxlen = e->hi - e->lo;
@@ -3712,30 +4000,27 @@ static void ub_reindex(void) {
     ub_maxhi_from(0);
 }
 /* Revoke only bytes replaced by a real producer. A partial producer must not erase neighbouring private updates. */
+static int ub_forget_one(int i, uint64_t a, uint64_t n) {
+    ub_ent *e = &g_ub[i];
+    if (e->lo >= a + n || e->hi <= a) return 0;
+    if (a <= e->lo && e->hi <= a + n) { free(e->data); memmove(e, e + 1, (size_t)(g_nub - i - 1) * sizeof *e); g_nub--; }
+    else if (a <= e->lo) { uint64_t skip = a + n - e->lo; memmove(e->data, e->data + skip, (size_t)(e->hi - a - n)); e->lo = a + n; }
+    else if (e->hi <= a + n) e->hi = a;
+    else {
+        ub_ent right = *e; right.lo = a + n; right.data = VK_MALLOC((size_t)(right.hi - right.lo));
+        memcpy(right.data, e->data + right.lo - e->lo, (size_t)(right.hi - right.lo)); e->hi = a;
+        if (g_nub == g_capub) { g_capub = g_capub ? 2 * g_capub : 256; g_ub = VK_REALLOC(g_ub, (size_t)g_capub * sizeof *g_ub); g_ub_maxhi = VK_REALLOC(g_ub_maxhi, (size_t)g_capub * sizeof *g_ub_maxhi); }
+        g_ub[g_nub++] = right;
+    }
+    return 1;
+}
 static void ub_forget(uint64_t a, uint64_t n) {
     int changed = 0;
-    for (int i = 0; i < g_nub; i++) {
-        ub_ent *e = &g_ub[i];
-        if (e->lo >= a + n || e->hi <= a) continue;
-        changed = 1;
-        if (a <= e->lo && e->hi <= a + n) {
-            free(e->data); memmove(e, e + 1, (size_t)(g_nub - i - 1) * sizeof *e); g_nub--; i--;
-        } else if (a <= e->lo) {
-            uint64_t skip = a + n - e->lo;
-            memmove(e->data, e->data + skip, (size_t)(e->hi - a - n)); e->lo = a + n;
-        } else if (e->hi <= a + n) e->hi = a;
-        else {
-            ub_ent right = *e;
-            right.lo = a + n; right.data = VK_MALLOC((size_t)(right.hi - right.lo));
-            memcpy(right.data, e->data + right.lo - e->lo, (size_t)(right.hi - right.lo)); e->hi = a;
-            if (g_nub == g_capub) {
-                g_capub = g_capub ? 2 * g_capub : 256;
-                g_ub = VK_REALLOC(g_ub, (size_t)g_capub * sizeof *g_ub);
-                g_ub_maxhi = VK_REALLOC(g_ub_maxhi, (size_t)g_capub * sizeof *g_ub_maxhi);
-            }
-            g_ub[g_nub++] = right;
-        }
-    }
+    if (totk_vk_ub_gw_fast_on()) {
+        int first = 0, end = 0;
+        if (!totk_ub_forget_window(g_ub, sizeof *g_ub, offsetof(ub_ent, lo), g_ub_maxhi, g_nub, g_ub_lo, g_ub_hi, g_ub_maxlen, a, n, &first, &end)) return;
+        for (int i = end - 1; i >= first; i--) changed |= ub_forget_one(i, a, n);
+    } else for (int i = g_nub - 1; i >= 0; i--) changed |= ub_forget_one(i, a, n);
     if (changed) { qsort(g_ub, (size_t)g_nub, sizeof *g_ub, ub_entry_cmp); ub_reindex(); ub_changed(a, n); }
 }
 /* Protected lag already forces synchronous replay in hle_nvn.c. Publish CPU-known, UBO-only updates after ALL
@@ -3754,7 +4039,8 @@ static void ub_publish(void) {
     if (g_ub_unflushed > cap) { cap = g_ub_unflushed; order = VK_REALLOC(order, (size_t)cap * sizeof *order); }
     int n = 0;
     for (int i = 0; i < g_nub; i++) if (!g_ub[i].flushed) order[n++] = i;
-    for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[order[j - 1]].seq > g_ub[order[j]].seq; j--) {
+    if (totk_vk_ans_widen_fast_on() && n > 1) totk_ub_sort_by_seq(order, n, g_ub, sizeof *g_ub, offsetof(ub_ent, seq));
+    else for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[order[j - 1]].seq > g_ub[order[j]].seq; j--) {
         int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t;
     }
     for (int k = 0; k < n; k++) {
@@ -3771,19 +4057,32 @@ static void ub_publish(void) {
     nvn_dirty_lag_thread_role(previous_role);
 }
 /* Materialize only updates a real consumer can observe. Chunk seals are not consumers of private UBO bytes. */
-static void ub_flush_inner(uint64_t lo, uint64_t hi) {
-    if (!g_ub_unflushed) return;
+static int ub_collect_flush_order(uint64_t lo, uint64_t hi, int **order_p, int *cap_p) {
+    if (totk_vk_ub_gw_fast_on()) {
+        int n = totk_ub_collect_unflushed(g_ub, sizeof *g_ub, offsetof(ub_ent, lo), offsetof(ub_ent, hi),
+                                          offsetof(ub_ent, flushed), g_ub_maxhi, g_nub, g_ub_lo, g_ub_hi, g_ub_maxlen, lo, hi, order_p, cap_p);
+        if (n > 1) totk_ub_sort_by_seq(*order_p, n, g_ub, sizeof *g_ub, offsetof(ub_ent, seq));
+        return n > 0 ? n : 0;
+    }
     int cnt = 0;
     for (int i = 0; i < g_nub; i++) cnt += !g_ub[i].flushed && g_ub[i].lo < hi && lo < g_ub[i].hi;
-    if (!cnt) return;
+    if (!cnt) return 0;
+    if (cnt > *cap_p) { *cap_p = cnt; *order_p = VK_REALLOC(*order_p, (size_t)*cap_p * sizeof **order_p); }
+    int n = 0;
+    for (int i = 0; i < g_nub; i++) if (!g_ub[i].flushed && g_ub[i].lo < hi && lo < g_ub[i].hi) (*order_p)[n++] = i;
+    for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[(*order_p)[j - 1]].seq > g_ub[(*order_p)[j]].seq; j--) {
+        int t = (*order_p)[j]; (*order_p)[j] = (*order_p)[j - 1]; (*order_p)[j - 1] = t;
+    }
+    return n;
+}
+static void ub_flush_inner(uint64_t lo, uint64_t hi) {
+    if (!g_ub_unflushed) return;
+    static int *order, cap;
+    int n = ub_collect_flush_order(lo, hi, &order, &cap);
+    if (!n) return;
     vk_end_rendering_at(VK_PASS_END_UNIFORM, 0);
     VkCommandBuffer cb = vk_cb();
     vk_barrier_all(cb);
-    static int *order, cap;
-    if (cnt > cap) { cap = cnt; order = VK_REALLOC(order, (size_t)cap * sizeof *order); }
-    int n = 0;
-    for (int i = 0; i < g_nub; i++) if (!g_ub[i].flushed && g_ub[i].lo < hi && lo < g_ub[i].hi) order[n++] = i;
-    for (int i = 1; i < n; i++) for (int j = i; j > 0 && g_ub[order[j - 1]].seq > g_ub[order[j]].seq; j--) { int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t; }
     uint64_t prev_lo = UINT64_MAX, prev_hi = 0;
     for (int k = 0; k < n; k++) {
         ub_ent *e = &g_ub[order[k]]; VkBuffer db; uint64_t dof;
@@ -3801,6 +4100,7 @@ static void ub_flush_inner(uint64_t lo, uint64_t hi) {
             if (e->hi > prev_hi) prev_hi = e->hi;
         }
         e->flushed = 1; g_ub_unflushed--;
+        totk_ub_unsealed_note(&g_ub_unsealed, order[k]);
         ub_changed(e->lo, e->hi - e->lo); /* a private overlay became a real original-memory producer */
         lag_producer_changed(e->lo, e->hi - e->lo);
     }
@@ -3831,15 +4131,29 @@ static int ub_pending_physical(uint64_t addr, uint64_t n) {
 #endif
     if (!vk_record_enabled()) { int idx[1]; return ub_overlaps(addr, addr + n, 1, idx, 1) != 0; }
     enum { NC = 256 }; static struct { uint64_t address, size, revision; } negative[NC];
-    __typeof__(negative[0]) *m = &negative[(unsigned)((addr >> 4) ^ (addr >> 18) ^ n) % NC];
-    if (m->address == addr && m->size == n && m->revision &&
-        (m->revision == g_ub_gen || vk_record_uniform_unchanged(m->revision, addr, n))) {
-        m->revision = g_ub_gen;
-        if (vk_rec_profile_on && T_rec.active) g_rec.touch_negative_hits++;
-        return 0;
+    static totk_ub_neg_memo4 neg4;
+    int fast = totk_ub_fast_on();
+    if (fast) {
+        totk_ub_neg_ent *e = totk_ub_neg_find(&neg4, addr, n);
+        if (e && e->revision && (e->revision == g_ub_gen || vk_record_uniform_unchanged(e->revision, addr, n))) {
+            e->revision = g_ub_gen;
+            if (vk_rec_profile_on && T_rec.active) g_rec.touch_negative_hits++;
+            return 0;
+        }
+    } else {
+        __typeof__(negative[0]) *m = &negative[(unsigned)((addr >> 4) ^ (addr >> 18) ^ n) % NC];
+        if (m->address == addr && m->size == n && m->revision &&
+            (m->revision == g_ub_gen || vk_record_uniform_unchanged(m->revision, addr, n))) {
+            m->revision = g_ub_gen;
+            if (vk_rec_profile_on && T_rec.active) g_rec.touch_negative_hits++;
+            return 0;
+        }
     }
     int idx[1], pending = ub_overlaps(addr, addr + n, 1, idx, 1) != 0;
-    if (!pending) *m = (__typeof__(*m)){addr, n, g_ub_gen};
+    if (!pending) {
+        if (fast) totk_ub_neg_put(&neg4, addr, n, g_ub_gen);
+        else negative[(unsigned)((addr >> 4) ^ (addr >> 18) ^ n) % NC] = (__typeof__(negative[0])){addr, n, g_ub_gen};
+    }
     return pending;
 }
 void vk_record_touch_buffer(uint64_t address, uint64_t size) {
@@ -3862,8 +4176,10 @@ void vk_record_touch_buffer(uint64_t address, uint64_t size) {
    updates of earlier submissions that were not in memory at the capture are laid over the copies; this submission's own
    updates go through renaming on top of them. A GPU copy into a range drops its snapshot (later bindings read memory on
    the GPU timeline). Ordinary snapshots require opt-in renaming; protected rename-OFF UBO captures are mandatory. */
-typedef struct { uint64_t done; int n; uint64_t *lo, *hi; size_t *off; uint8_t *bytes; } ucap_t;
-typedef struct { uint64_t lo, hi; VkBuffer buf; VkDeviceSize off; uint8_t *cpu; int dead, updated; } snap_t;
+typedef struct { size_t slab_cap; uint64_t done; int n; uint64_t *lo, *hi; size_t *off; uint8_t *bytes; } ucap_t;
+static totk_ucap_pool_t g_ucap_pool;
+__attribute__((destructor)) static void ucap_pool_fini(void) { totk_ucap_pool_drain(&g_ucap_pool); }
+typedef struct { uint64_t lo, hi; VkBuffer buf; VkDeviceSize off; uint8_t *cpu; int dead, updated; uint64_t upd_lo, upd_hi, upd_bloom; } snap_t;
 static snap_t *g_snap; static int g_nsnap, g_capsnap;
 static uint64_t g_snap_seq, g_snap_generation;   /* overlay watermark and immutable game-submission base identity */
 static void snap_reset(void) { g_nsnap = 0; g_snap_seq = g_ub_seq; g_snap_generation++; g_prune_floor = UINT64_MAX; ub_changed(0, UINT64_MAX); }
@@ -3878,6 +4194,8 @@ static int snap_on(void) { return (ub_rename_on() && !vk_off("snap")) || ub_priv
    ~0.8 ms/frame on the Thor walker. Sealing only assigns fences and pruning is a stable filter: both keep the order. */
 typedef struct { uint64_t lo, hi, fence; } gw_t;
 static gw_t *g_gw; static uint64_t *g_gw_maxhi; static int g_ngw, g_capgw; static pthread_mutex_t g_gw_mu = PTHREAD_MUTEX_INITIALIZER;
+static totk_gw_summary g_gw_sum;
+static totk_gw_unsealed_t g_gw_unsealed;
 static uint64_t g_stat_snap_skipped;
 static void gw_reindex_from(int i) {   /* caller holds g_gw_mu */
     uint64_t m = i ? g_gw_maxhi[i - 1] : 0;
@@ -3889,6 +4207,7 @@ static int gw_lower(uint64_t lo) {   /* first entry with lo >= the argument; cal
     return a;
 }
 static int gw_pending(uint64_t lo, uint64_t hi, uint64_t done) {   /* caller holds g_gw_mu */
+    if (!g_ngw || (totk_gw_fast_on() && !totk_gw_hit_locked(&g_gw_sum, lo, hi))) return 0;
     for (int i = gw_lower(hi) - 1; i >= 0 && g_gw_maxhi[i] > lo; i--)
         if (lo < g_gw[i].hi && (!g_gw[i].fence || g_gw[i].fence > done)) return 1;
     return 0;
@@ -3905,14 +4224,39 @@ static void gw_add(uint64_t lo, uint64_t hi) {
     }
     memmove(g_gw + at + 1, g_gw + at, (size_t)(g_ngw - at) * sizeof *g_gw);
     g_gw[at] = (gw_t){lo, hi, 0}; g_ngw++;
+    totk_gw_sum_add(&g_gw_sum, lo, hi);
+    totk_gw_unsealed_add(&g_gw_unsealed, lo);
     gw_reindex_from(at);
 }
-static void gw_seal(uint64_t fence) { pthread_mutex_lock(&g_gw_mu); for (int i = 0; i < g_ngw; i++) if (!g_gw[i].fence) g_gw[i].fence = fence; pthread_mutex_unlock(&g_gw_mu); }
-static void gw_prune(void) {
-    uint64_t done = atomic_load(&g_done); int j = 0;
+static void gw_seal(uint64_t fence) {
     pthread_mutex_lock(&g_gw_mu);
-    for (int i = 0; i < g_ngw; i++) if (!g_gw[i].fence || g_gw[i].fence > done) g_gw[j++] = g_gw[i];
-    g_ngw = j; gw_reindex_from(0);
+    if (totk_vk_ub_gw_fast_on()) {
+        if (g_ngw && totk_gw_unsealed_has(&g_gw_unsealed)) {
+            int i = gw_lower(g_gw_unsealed.min_lo); uint32_t rem = g_gw_unsealed.count, sealed = 0;
+            for (; i < g_ngw && g_gw[i].lo <= g_gw_unsealed.max_lo && rem > 0u; i++) if (!g_gw[i].fence) { g_gw[i].fence = fence; rem--; sealed = 1; }
+            if (sealed) { if (fence > g_gw_max_fence) g_gw_max_fence = fence; totk_fence_min_note(&g_gw_min_fence, fence); }
+            totk_gw_unsealed_reset(&g_gw_unsealed);
+        } else if (!g_ngw) totk_gw_unsealed_reset(&g_gw_unsealed);
+    } else {
+        for (int i = 0; i < g_ngw; i++) if (!g_gw[i].fence) { g_gw[i].fence = fence; if (fence > g_gw_max_fence) g_gw_max_fence = fence; totk_fence_min_note(&g_gw_min_fence, fence); }
+        totk_gw_unsealed_reset(&g_gw_unsealed);
+    }
+    pthread_mutex_unlock(&g_gw_mu);
+}
+static void gw_prune(void) {
+    uint64_t done = atomic_load(&g_done), mlo = 0, mhi = 0, blm = 0, mf = 0, minf = UINT64_MAX; int j = 0;
+    pthread_mutex_lock(&g_gw_mu);
+    if (totk_vk_copy_span_fast_on() && !totk_fence_can_prune(g_ngw, g_gw_min_fence, done)) { pthread_mutex_unlock(&g_gw_mu); return; }
+    totk_gw_unsealed_reset(&g_gw_unsealed);
+    for (int i = 0; i < g_ngw; i++) if (!g_gw[i].fence || g_gw[i].fence > done) {
+        gw_t w = g_gw[i];
+        if (!w.fence) totk_gw_unsealed_add(&g_gw_unsealed, w.lo); else { if (w.fence > mf) mf = w.fence; totk_fence_min_note(&minf, w.fence); }
+        if (!j || w.lo < mlo) mlo = w.lo;
+        if (!j || w.hi > mhi) mhi = w.hi;
+        blm |= totk_gw_bloom_mask(w.lo, w.hi); g_gw[j++] = w;
+    }
+    g_ngw = j; g_gw_max_fence = mf; g_gw_min_fence = minf; gw_reindex_from(0);
+    totk_gw_sum_publish(&g_gw_sum, (uint32_t)j, mlo, mhi, blm);
     pthread_mutex_unlock(&g_gw_mu);
 }
 static void snap_drop(uint64_t a, uint64_t n);
@@ -3934,23 +4278,36 @@ static int ub_original_pending(uint64_t a, uint64_t n) {
 static int lag_original_pending(uint64_t address, uint64_t size) {
     enum { NP = 1024 };
     static struct { uint64_t address, size, revision, ticket, spans, lifetime, done; int pending; } memo[NP];
-    __typeof__(memo[0]) *m = &memo[lag_hash(address, size, 0) % NP];
+    static totk_orig_pend_memo4 memo4;
+    int fast = totk_gw_fast_on() && size > 0;
     uint64_t ticket = g_reserved_fence + 1, spans = atomic_load_explicit(&g_span_gen, memory_order_acquire);
-    uint64_t lifetime = nvn_dirty_lag_epoch();
-    if (m->address == address && m->size == size && m->spans == spans && m->lifetime == lifetime &&
-        (!m->pending || m->done == atomic_load(&g_done)) && lag_producer_unchanged(m->revision, address, size)) {
-        LAG_TEST_INC(VK_LAG_TEST_PRODUCER_HITS);
-        if (!m->pending && m->ticket != ticket) LAG_TEST_INC(VK_LAG_TEST_PRODUCER_CROSS_TICKET);
-        m->revision = g_lag_producer_revision; m->ticket = ticket;
-        return m->pending;
+    uint64_t lifetime = nvn_dirty_lag_epoch(), cur_done = atomic_load(&g_done);
+    if (fast) {
+        totk_orig_pend_ent *e = totk_orig_pend_find(&memo4, address, size, spans, lifetime, cur_done);
+        if (e && lag_producer_unchanged(e->revision, address, size)) {
+            LAG_TEST_INC(VK_LAG_TEST_PRODUCER_HITS);
+            if (!e->pending && e->ticket != ticket) LAG_TEST_INC(VK_LAG_TEST_PRODUCER_CROSS_TICKET);
+            e->revision = g_lag_producer_revision; e->ticket = ticket; return e->pending;
+        }
+    } else {
+        __typeof__(memo[0]) *m = &memo[lag_hash(address, size, 0) % NP];
+        if (m->address == address && m->size == size && m->spans == spans && m->lifetime == lifetime &&
+            (!m->pending || m->done == cur_done) && lag_producer_unchanged(m->revision, address, size)) {
+            LAG_TEST_INC(VK_LAG_TEST_PRODUCER_HITS);
+            if (!m->pending && m->ticket != ticket) LAG_TEST_INC(VK_LAG_TEST_PRODUCER_CROSS_TICKET);
+            m->revision = g_lag_producer_revision; m->ticket = ticket; return m->pending;
+        }
     }
     LAG_TEST_INC(VK_LAG_TEST_PRODUCER_SCANS);
-    uint64_t done = atomic_load(&g_done);
-    pthread_mutex_lock(&g_gw_mu);
-    int pending = gw_pending(address, address + size, done);
-    pthread_mutex_unlock(&g_gw_mu);
+    uint64_t done = atomic_load(&g_done); int pending = 0;
+    if (!totk_gw_fast_on() || totk_gw_may_overlap(&g_gw_sum, address, address + size)) {
+        pthread_mutex_lock(&g_gw_mu);
+        pending = gw_pending(address, address + size, done);
+        pthread_mutex_unlock(&g_gw_mu);
+    }
     if (!pending) pending = ub_original_pending(address, size);
-    *m = (__typeof__(*m)){address, size, g_lag_producer_revision, ticket, spans, lifetime, done, pending};
+    if (fast) totk_orig_pend_insert(&memo4, address, size, g_lag_producer_revision, ticket, spans, lifetime, done, pending);
+    else memo[lag_hash(address, size, 0) % NP] = (__typeof__(memo[0])){address, size, g_lag_producer_revision, ticket, spans, lifetime, done, pending};
     return pending;
 }
 #ifdef TOTK_VK_TESTS
@@ -4013,7 +4370,7 @@ static unsigned lag_test_gw_index(unsigned *checks) {
     #undef GW_RAND
     /* Per-query cost at the route's size: ~100 pending writes, 1,308 capture ranges per submission. */
     for (int count = 32; count <= 512; count *= 4) {
-        pthread_mutex_lock(&g_gw_mu); g_ngw = 0;
+        pthread_mutex_lock(&g_gw_mu); g_ngw = 0; g_gw_max_fence = 0; g_gw_min_fence = UINT64_MAX; totk_gw_sum_clear(&g_gw_sum); totk_gw_unsealed_reset(&g_gw_unsealed);
         for (int i = 0; i < count; i++) gw_add(UINT64_C(0x360000000) + (uint64_t)i * 65536 * 3, UINT64_C(0x360000000) + (uint64_t)i * 65536 * 3 + 4096);
         pthread_mutex_unlock(&g_gw_mu);
         uint64_t ns[2]; unsigned hits[2] = {0};
@@ -4030,7 +4387,7 @@ static unsigned lag_test_gw_index(unsigned *checks) {
         printf("lag-query GPU writes %d pending: linear %.2f indexed %.2f ns/query; 6540 capture ranges/frame %.3f -> %.3f ms\n",
                count, ns[0] / 2e5, ns[1] / 2e5, ns[0] / 2e5 * 6540 / 1e6, ns[1] / 2e5 * 6540 / 1e6);
     }
-    pthread_mutex_lock(&g_gw_mu); g_ngw = 0; pthread_mutex_unlock(&g_gw_mu);
+    pthread_mutex_lock(&g_gw_mu); g_ngw = 0; g_gw_max_fence = 0; g_gw_min_fence = UINT64_MAX; totk_gw_sum_clear(&g_gw_sum); totk_gw_unsealed_reset(&g_gw_unsealed); pthread_mutex_unlock(&g_gw_mu);
     atomic_store(&g_done, 0);
     free(shadow);
     return errors;
@@ -4071,7 +4428,8 @@ int vk_lag_test_query_bench(void) {
         printf("lag-query pending %d entries: scalar %.2f indexed %.2f ns/query; 20000 queries/frame %.3f -> %.3f ms; hits %u/%u\n",
             count, ns[0] / (double)CALLS, ns[1] / (double)CALLS,
             ns[0] / (double)CALLS * .02, ns[1] / (double)CALLS * .02, hits[0], hits[1]);
-        free(g_ub); free(g_ub_maxhi); g_ub = NULL; g_ub_maxhi = NULL; g_nub = 0;
+        free(g_ub); free(g_ub_maxhi); g_ub = NULL; g_ub_maxhi = NULL; g_nub = 0; g_ub_max_fence = 0; g_ub_min_fence = UINT64_MAX;
+        totk_ub_unsealed_reset(&g_ub_unsealed);
     }
     setenv("TOTK_FRAME_LAG", "1", 1);
     for (unsigned gap = 64; gap <= LAG_PRODUCER_CHANGES; gap *= 8) {
@@ -4129,8 +4487,12 @@ void vk_record_test_gpu_write_pause(_Atomic int *ready, _Atomic int *resume) {
 }
 uint64_t vk_record_test_gpu_write_guards(void) { return g_test_gpu_write_guards; }
 #endif
+static _Atomic uint64_t g_gpu_write_gen;
+uint64_t vk_gpu_write_gen(void) { return atomic_load_explicit(&g_gpu_write_gen, memory_order_acquire); }
+void vk_gpu_write_bump(void) { atomic_fetch_add_explicit(&g_gpu_write_gen, 1, memory_order_release); }
 static void gpu_write_inner(uint64_t a, uint64_t n, int guard) {
     if (!n) return;
+    vk_gpu_write_bump();
     vk_wb_gpu_wrote(a, n);
     int replay=vk_fg_enabled();
     if (ub_private_on() || replay) vk_ub_touch(a, n);
@@ -4152,19 +4514,33 @@ static void gpu_write_inner(uint64_t a, uint64_t n, int guard) {
        with the new graph. New aliases must also revoke guarded=true even when the donor is unchanged. */
     uint64_t spans = atomic_load_explicit(&g_span_gen, memory_order_acquire);
     { enum { NG = 256 }; static struct { uint64_t a, n, sub, physical, spans; int guarded; } seen[NG];
-      uint64_t sub = vk_submit_serial(); unsigned h = (unsigned)((a >> 6) ^ (a >> 20) ^ n) % NG;
-      if (seen[h].a == a && seen[h].n == n && seen[h].sub == sub &&
-          seen[h].physical == physical && seen[h].spans == spans) {
-          if (guard && !seen[h].guarded) {
+      static totk_gw_seen4 seen4; uint64_t sub = vk_submit_serial();
+      if (totk_gw_fast_on()) {
+          int ng = 0;
+          if (totk_gw_seen4_probe(&seen4, a, n, sub, physical, spans, guard, &ng)) {
+              if (ng) {
 #ifdef TOTK_VK_TESTS
-              g_test_gpu_write_guards++;
+                  g_test_gpu_write_guards++;
 #endif
-              lag_guard_mark(a, n, NVN_DIRTY_LAG_WRITABLE | NVN_DIRTY_LAG_GPU); seen[h].guarded = 1;
+                  lag_guard_mark(a, n, NVN_DIRTY_LAG_WRITABLE | NVN_DIRTY_LAG_GPU);
+              }
+              return;
           }
-          return;
-      }
-      seen[h].a = a; seen[h].n = n; seen[h].sub = sub; seen[h].physical = physical;
-      seen[h].spans = spans; seen[h].guarded = guard; }
+      } else {
+          unsigned h = (unsigned)((a >> 6) ^ (a >> 20) ^ n) % NG;
+          if (seen[h].a == a && seen[h].n == n && seen[h].sub == sub &&
+              seen[h].physical == physical && seen[h].spans == spans) {
+              if (guard && !seen[h].guarded) {
+#ifdef TOTK_VK_TESTS
+                  g_test_gpu_write_guards++;
+#endif
+                  lag_guard_mark(a, n, NVN_DIRTY_LAG_WRITABLE | NVN_DIRTY_LAG_GPU); seen[h].guarded = 1;
+              }
+              return;
+          }
+          seen[h].a = a; seen[h].n = n; seen[h].sub = sub; seen[h].physical = physical;
+          seen[h].spans = spans; seen[h].guarded = guard;
+      } }
     /* Count guard forwarding rather than eventual registrations: fresh frozen alias projection is
        required here; the existing late submit path still owns ticket arming and its failures. */
 #ifdef TOTK_VK_TESTS
@@ -4178,6 +4554,19 @@ static void gpu_write_inner(uint64_t a, uint64_t n, int guard) {
     pthread_mutex_unlock(&g_gw_mu);
 }
 void vk_gpu_write(uint64_t a, uint64_t n) { VK_REC_DO(VK_REC_S_WRITE, gpu_write_inner(a, n, 1)); }
+int vk_gpu_write_pending(uint64_t addr, uint64_t n) {
+    if (!n) return 0;
+    uint64_t a = ub_address(addr, n);
+    if (!a || a + n < a) return 1;
+    int gpu = 0;
+    if (!totk_gw_fast_on() || totk_gw_may_overlap(&g_gw_sum, a, a + n)) {
+        pthread_mutex_lock(&g_gw_mu);
+        gpu = gw_pending(a, a + n, atomic_load_explicit(&g_done, memory_order_acquire));
+        pthread_mutex_unlock(&g_gw_mu);
+    }
+    if (!gpu && ub_private_on()) gpu = ub_original_pending(a, n);
+    return gpu;
+}
 void vk_gpu_write_record(uint64_t a, uint64_t n) { VK_REC_DO(VK_REC_S_WRITE, gpu_write_inner(a, n, 0)); }
 typedef struct { uint64_t lo, hi; } rng_t;
 enum { UBO_SEEN = 1024 }; /* shared across recursive command lists, allocated once per capture */
@@ -4187,27 +4576,12 @@ static int rng_cmp(const void *x, const void *y) { const rng_t *a = x, *b = y; r
    Distinct lo come out in qsort's order; equal lo keep input order, which the capture merge does not depend on.
    Scratch is per call: asynchronous capture can run on a game thread while the walker captures. */
 static void rng_sort(rng_t *r, int n) {
-    if (n < 2) return;
-    if (n <= 32) {
-        for (int i = 1; i < n; i++) { rng_t x = r[i]; int j = i; for (; j > 0 && r[j - 1].lo > x.lo; j--) r[j] = r[j - 1]; r[j] = x; }
+    if (subcap_fast_nvn_on()) {
+        static _Thread_local totk_rng_pair t_sort_inl[4096];
+        totk_radix_sort_rng((totk_rng_pair *)r, n, t_sort_inl, 4096);
         return;
     }
-    uint64_t any = 0, all = UINT64_MAX;
-    for (int i = 0; i < n; i++) { any |= r[i].lo; all &= r[i].lo; }
-    uint64_t vary = any ^ all;
-    rng_t *tmp = VK_MALLOC((size_t)n * sizeof *tmp), *src = r, *dst = tmp;
-    unsigned count[2048];
-    for (unsigned shift = 0; shift < 64; shift += 11) {
-        if (!((vary >> shift) & 2047)) continue;
-        memset(count, 0, sizeof count);
-        for (int i = 0; i < n; i++) count[(src[i].lo >> shift) & 2047]++;
-        unsigned sum = 0;
-        for (unsigned b = 0; b < 2048; b++) { unsigned c = count[b]; count[b] = sum; sum += c; }
-        for (int i = 0; i < n; i++) dst[count[(src[i].lo >> shift) & 2047]++] = src[i];
-        rng_t *swap = src; src = dst; dst = swap;
-    }
-    if (src != r) memcpy(r, src, (size_t)n * sizeof *r);
-    free(tmp);
+    totk_radix_sort_rng((totk_rng_pair *)r, n, NULL, 0);
 }
 #ifdef TOTK_VK_TESTS
 /* rng_sort against qsort: identical key order, and a permutation of the input (hi travels with its lo). */
@@ -4239,24 +4613,44 @@ static unsigned lag_test_rng_sort(unsigned *checks) {
     return errors;
 }
 #endif
-static void collect_ubos(rng_t **r, int *n, int *cap, const uint8_t *p, int depth, rng_t seen[UBO_SEEN]) {
+_Static_assert(sizeof(totk_rng_pair) == sizeof(rng_t) && __builtin_offsetof(totk_rng_pair, lo) == __builtin_offsetof(rng_t, lo) &&
+               __builtin_offsetof(totk_rng_pair, hi) == __builtin_offsetof(rng_t, hi), "totk_rng_pair layout");
+static int ucap_append_rng(rng_t **r, int *n, int *cap, rng_t *inl, uint64_t a, uint64_t hi) {
+    if (*n == *cap) {
+        int ncap = *cap ? 2 * *cap : 4096;
+        if (*r == inl) { rng_t *nb = VK_MALLOC((size_t)ncap * sizeof *nb); memcpy(nb, inl, (size_t)*n * sizeof *nb); *r = nb; }
+        else { *r = VK_REALLOC(*r, (size_t)ncap * sizeof **r); }
+        *cap = ncap;
+    }
+    (*r)[(*n)++] = (rng_t){a, hi};
+    return 1;
+}
+static void collect_ubos(rng_t **r, int *n, int *cap, rng_t *inl, const uint8_t *p,
+                         rng_t seen[UBO_SEEN], totk_ubo_seen_tls *seen_tls, totk_sub_seen4 *call_seen) {
+    if (call_seen && !totk_sub_seen4_first(call_seen, (uint64_t)(uintptr_t)p)) return;
+    const uint8_t *ret_stk[16]; int sp = 0;
     for (int guard = 0; guard < 1000000; guard++) {
         op_hdr h; memcpy(&h, p, sizeof h);
-        if (h.size < 8 || (h.size & 7) || h.op >= OP_COUNT_) return;
-        if (h.op == OP_END) return;
+        if (h.size < 8 || (h.size & 7) || h.op >= OP_COUNT_) { if (!sp) return; p = ret_stk[--sp]; continue; }
+        if (h.op == OP_END) { if (!sp) return; p = ret_stk[--sp]; continue; }
         if (h.op == OP_JUMP) { memcpy(&p, p + 8, 8); continue; }
-        if (h.op == OP_CALL) { const uint8_t *t; memcpy(&t, p + 8, 8); if (depth < 16) collect_ubos(r, n, cap, t, depth + 1, seen); }
-        else if (h.op == OP_BIND_UBO) {
+        if (h.op == OP_CALL) {
+            const uint8_t *t; memcpy(&t, p + 8, 8);
+            if (sp < 16 && (!call_seen || totk_sub_seen4_first(call_seen, (uint64_t)(uintptr_t)t))) {
+                ret_stk[sp++] = p + h.size; p = t; continue;
+            }
+        } else if (h.op == OP_BIND_UBO) {
             const p_bind_buf *b = (const p_bind_buf *)(p + 8);
             if (b->addr && b->size && b->size <= 65536) {
                 uint64_t address = ub_address(b->addr, b->size);
                 unsigned slot = lag_hash(address, b->size, 0) % UBO_SEEN;
                 if (vk_rec_profile_on && T_rec.active) g_rec.snapshot_bindings++;
-                if (seen[slot].lo == address && seen[slot].hi == address + b->size) { p += h.size; continue; }
-                seen[slot] = (rng_t){address, address + b->size};
+                int hit = seen_tls ? totk_ubo_seen_hit(seen_tls, slot, address, address + b->size)
+                                   : (seen[slot].lo == address && seen[slot].hi == address + b->size);
+                if (hit) { p += h.size; continue; }
+                if (!seen_tls) seen[slot] = (rng_t){address, address + b->size};
                 if (vk_rec_profile_on && T_rec.active) g_rec.snapshot_unique++;
-                if (*n == *cap) { *cap = *cap ? 2 * *cap : 4096; *r = VK_REALLOC(*r, (size_t)*cap * sizeof **r); }
-                (*r)[(*n)++] = (rng_t){address, address + b->size};
+                ucap_append_rng(r, n, cap, inl, address, address + b->size);
             }
         }
         p += h.size;
@@ -4278,7 +4672,7 @@ static int lag_test_collect_bench(void) {
         int n = 0; uint64_t start = host_now_ns();
         for (unsigned repeat = 0; repeat < REPEATS; repeat++) {
             n = 0; memset(seen, 0, (mode ? UBO_SEEN : 64) * sizeof *seen);
-            if (mode) collect_ubos(&r, &n, &capacity, (const uint8_t *)stream, 0, seen);
+            if (mode) collect_ubos(&r, &n, &capacity, NULL, (const uint8_t *)stream, seen, NULL, NULL);
             else for (int i = 0; i < BINDS; i++) {
                 uint64_t a = ub_address(stream[i].b.addr, stream[i].b.size);
                 unsigned slot = (unsigned)((a >> 8) ^ (a >> 20) ^ stream[i].b.size) & 63;
@@ -4308,59 +4702,139 @@ static int lag_test_collect_bench(void) {
     free(r); free(stream); return errors != 0;
 }
 #endif
-static ucap_t *ucap_build(const uint64_t *h, int n, int copy_bytes) {
-    ucap_t *c = VK_CALLOC(1, sizeof *c);
-    c->done = atomic_load(&g_done);   /* before the bytes: a write completing meanwhile only makes this conservative */
-    rng_t *r = NULL, seen[UBO_SEEN] = {0}; int nr = 0, cap = 0;
-    for (int i = 0; i < n; i++) collect_ubos(&r, &nr, &cap, (const uint8_t *)(uintptr_t)h[i], 0, seen);
-    if (nr) {
-        rng_sort(r, nr);
-        int k = -1;   /* merge overlapping / touching ranges inside one pool; drop ranges outside every pool */
-        for (int i = 0; i < nr; i++) {
-            VkBuffer b; uint64_t o;
-            if (k >= 0 && r[i].lo <= r[k].hi) { if (r[i].hi <= r[k].hi) continue; if (vk_resolve(r[k].lo, r[i].hi - r[k].lo, &b, &o)) { r[k].hi = r[i].hi; continue; } }
-            if (!vk_resolve(r[i].lo, r[i].hi - r[i].lo, &b, &o)) continue;
-            if (k >= 0 && r[i].lo < r[k].hi) r[i].lo = r[k].hi;   /* keep the copies disjoint */
-            r[++k] = r[i];
+static int ucap_merge_ranges_fast(rng_t *r, int nr) {
+    const span_cache_t *sc = span_cache_ready();
+    totk_span_win_t kw = {.seg_idx = -1}, iw = {.seg_idx = -1};
+    const size_t sps = sizeof(span_t), sgs = sizeof(span_seg_t);
+    const size_t oe = __builtin_offsetof(span_t, end), ol = __builtin_offsetof(span_seg_t, lo), ob = __builtin_offsetof(span_seg_t, best);
+    int k = -1;
+    for (int i = 0; i < nr; i++) {
+        if (r[i].hi < r[i].lo) continue;
+        if (k >= 0 && r[i].lo <= r[k].hi) {
+            if (r[i].hi <= r[k].hi) continue;
+            if (totk_span_win_contains(&kw, (uintptr_t)r[i].hi)) { r[k].hi = r[i].hi; continue; }
         }
-        /* ranges a GPU write still in flight overlaps are left to memory (the GPU timeline) */
+        totk_span_win_seek(&iw, sc->s, sps, oe, sc->seg, sgs, ol, ob, sc->nseg, (uintptr_t)r[i].lo);
+        if (!totk_span_win_contains(&iw, (uintptr_t)r[i].hi)) continue;
+        int trimmed = (k >= 0 && r[i].lo < r[k].hi);
+        if (trimmed) r[i].lo = r[k].hi;
+        r[++k] = r[i];
+        if (!trimmed) kw = iw;
+        else totk_span_win_seek(&kw, sc->s, sps, oe, sc->seg, sgs, ol, ob, sc->nseg, (uintptr_t)r[k].lo);
+    }
+    return k;
+}
+static int ucap_merge_ranges(rng_t *r, int nr) {
+    if (subcap_fast_nvn_on() && !span_linear() && !g_lookup_stats && !(vk_rec_profile_on && T_rec.active))
+        return ucap_merge_ranges_fast(r, nr);
+    int k = -1;
+    for (int i = 0; i < nr; i++) {
+        VkBuffer b; uint64_t o;
+        if (k >= 0 && r[i].lo <= r[k].hi) { if (r[i].hi <= r[k].hi) continue; if (vk_resolve(r[k].lo, r[i].hi - r[k].lo, &b, &o)) { r[k].hi = r[i].hi; continue; } }
+        if (!vk_resolve(r[i].lo, r[i].hi - r[i].lo, &b, &o)) continue;
+        if (k >= 0 && r[i].lo < r[k].hi) r[i].lo = r[k].hi;
+        r[++k] = r[i];
+    }
+    return k;
+}
+static int ucap_filter_pending(rng_t *r, int k, uint64_t done) {
+    if (k < 0) return -1;
+    if (!totk_gw_fast_on() || totk_gw_may_overlap(&g_gw_sum, r[0].lo, r[k].hi)) {
         pthread_mutex_lock(&g_gw_mu);
         int m = 0; for (int i = 0; i <= k; i++) {
-            if ((g_ngw && gw_pending(r[i].lo, r[i].hi, c->done)) ||
-                (ub_private_on() && ub_original_pending(r[i].lo, r[i].hi - r[i].lo))) {
+            if ((g_ngw && gw_pending(r[i].lo, r[i].hi, done)) || (ub_private_on() && ub_original_pending(r[i].lo, r[i].hi - r[i].lo))) {
                 g_stat_snap_skipped++; continue;
             }
             r[m++] = r[i];
         }
         pthread_mutex_unlock(&g_gw_mu);
-        k = m - 1;
-        c->n = k + 1;
-        c->lo = VK_MALLOC(sizeof *c->lo * (size_t)(c->n + 1)); c->hi = VK_MALLOC(sizeof *c->hi * (size_t)(c->n + 1));
-        if (copy_bytes) c->off = VK_MALLOC(sizeof *c->off * (size_t)(c->n + 1));
-        size_t total = 0; for (int i = 0; i < c->n; i++) {
-            c->lo[i] = r[i].lo; c->hi[i] = r[i].hi;
-            if (copy_bytes) { c->off[i] = total; total += (size_t)(r[i].hi - r[i].lo); }
-        }
-        if (copy_bytes) {
-            c->bytes = VK_MALLOC(total ? total : 1);
-            for (int i = 0; i < c->n; i++) memcpy(c->bytes + c->off[i], (const void *)(uintptr_t)c->lo[i], (size_t)(c->hi[i] - c->lo[i]));
-        }
+        return m - 1;
     }
-    free(r);
+    if (!ub_private_on()) return k;
+    int m = 0; for (int i = 0; i <= k; i++) {
+        if (ub_original_pending(r[i].lo, r[i].hi - r[i].lo)) { g_stat_snap_skipped++; continue; }
+        r[m++] = r[i];
+    }
+    return m - 1;
+}
+static ucap_t *ucap_pack_result(const rng_t *r, int cnt, uint64_t done, int copy_bytes) {
+    size_t total = 0u;
+    if (copy_bytes) for (int i = 0; i < cnt; i++) total += (size_t)(r[i].hi - r[i].lo);
+    ucap_t *c = NULL;
+    if (subcap_fast_nvn_on()) {
+        size_t need = totk_ucap_slab_need(sizeof *c, cnt, copy_bytes, total), got = 0u;
+        c = (ucap_t *)totk_ucap_pool_acquire(&g_ucap_pool, need, &got);
+        if (!c) DIE("ucap slab");
+        memset(c, 0, sizeof *c);
+        c->slab_cap = got; c->done = done; c->n = cnt;
+        totk_ucap_slice(c, sizeof *c, cnt, copy_bytes, &c->lo, &c->hi, &c->off, &c->bytes);
+    } else {
+        c = VK_CALLOC(1, sizeof *c); c->done = done; c->n = cnt;
+        c->lo = VK_MALLOC(sizeof *c->lo * (size_t)(cnt + 1)); c->hi = VK_MALLOC(sizeof *c->hi * (size_t)(cnt + 1));
+        if (copy_bytes) { c->off = VK_MALLOC(sizeof *c->off * (size_t)(cnt + 1)); c->bytes = VK_MALLOC(total ? total : 1u); }
+    }
+    size_t off = 0u;
+    for (int i = 0; i < cnt; i++) {
+        c->lo[i] = r[i].lo; c->hi[i] = r[i].hi;
+        if (copy_bytes) { size_t sz = (size_t)(r[i].hi - r[i].lo); c->off[i] = off; memcpy(c->bytes + off, (const void *)(uintptr_t)r[i].lo, sz); off += sz; }
+    }
     return c;
 }
-static void ucap_free(ucap_t *c) { if (c) { free(c->lo); free(c->hi); free(c->off); free(c->bytes); free(c); } }
+static ucap_t *ucap_build(const uint64_t *h, int n, int copy_bytes) {
+    uint64_t done = atomic_load(&g_done);
+    int fast = subcap_fast_nvn_on();
+    static _Thread_local rng_t t_r_inl[4096], t_seen_leg[UBO_SEEN];
+    static _Thread_local totk_ubo_seen_tls t_seen_tls;
+    static _Thread_local totk_sub_seen4 t_call_seen;
+    rng_t *r = fast ? t_r_inl : NULL; int nr = 0, cap = fast ? 4096 : 0;
+    if (fast) totk_ubo_seen_reset(&t_seen_tls); else memset(t_seen_leg, 0, sizeof t_seen_leg);
+    totk_sub_seen4 *csp = (totk_nvn_sub_fast_on() && !(vk_rec_profile_on && T_rec.active)) ? &t_call_seen : NULL;
+    if (csp) totk_sub_seen4_reset(csp);
+    for (int i = 0; i < n; i++) collect_ubos(&r, &nr, &cap, t_r_inl, (const uint8_t *)(uintptr_t)h[i], t_seen_leg, fast ? &t_seen_tls : NULL, csp);
+    int k = -1;
+    if (nr) {
+        rng_sort(r, nr);
+        k = ucap_filter_pending(r, ucap_merge_ranges(r, nr), done);
+    }
+    ucap_t *c = ucap_pack_result(r, k + 1, done, copy_bytes);
+    if (r != t_r_inl) free(r);
+    return c;
+}
+static void ucap_free(ucap_t *c) {
+    if (!c) return;
+    if (c->slab_cap) { totk_ucap_pool_release(&g_ucap_pool, c, c->slab_cap); return; }
+    free(c->lo); free(c->hi); free(c->off); free(c->bytes); free(c);
+}
 void *mtl_sub_capture_ubos(const uint64_t *h, int n) { return snap_on() ? ucap_build(h, n, 1) : NULL; } /* async: eagerly own the bytes */
 static int snap_first(uint64_t a) { int lo = 0, hi = g_nsnap; while (lo < hi) { int m = (lo + hi) >> 1; if (g_snap[m].hi <= a) lo = m + 1; else hi = m; } return lo; }
 static const snap_t *snap_find(uint64_t a, uint64_t n) {   /* the live copy holding all of [a, a+n) */
+    static _Thread_local totk_snap_memo4 sm4;
+    if (!n) return NULL;
+    int fast = totk_ub_fast_on() && g_snap_generation != 0;
+    int32_t cached_i = -1;
+    if (fast && totk_snap_memo4_get(&sm4, a, n, g_snap_generation, &cached_i)) {
+        if (cached_i < 0) return NULL;
+        if (cached_i < g_nsnap && !g_snap[cached_i].dead && g_snap[cached_i].lo <= a && a + n <= g_snap[cached_i].hi)
+            return &g_snap[cached_i];
+        return NULL;
+    }
     int i = snap_first(a);
-    return i < g_nsnap && !g_snap[i].dead && g_snap[i].lo <= a && a + n <= g_snap[i].hi ? &g_snap[i] : NULL;
+    int hit = i < g_nsnap && g_snap[i].lo <= a && a + n <= g_snap[i].hi;
+    if (fast) totk_snap_memo4_put(&sm4, a, n, g_snap_generation, hit ? (int32_t)i : -1);
+    return hit && !g_snap[i].dead ? &g_snap[i] : NULL;
 }
 /* A snapshot already contains all updates logged at its creation. Only a later overlapping update can make a binding
    need an overlay: mark once at the update instead of searching the whole log at every binding of untouched snapshots.
    The flag stays conservative after chunk submissions seal / prune those updates. */
 static void snap_note_update(uint64_t lo, uint64_t n) {
-    for (int i = snap_first(lo); i < g_nsnap && g_snap[i].lo < lo + n; i++) g_snap[i].updated = 1;
+    if (!n) return;
+    uint64_t hi = lo + n, blm = totk_ub_page_bloom(lo, hi);
+    for (int i = snap_first(lo); i < g_nsnap && g_snap[i].lo < hi; i++) {
+        snap_t *s = &g_snap[i];
+        if (!s->updated || lo < s->upd_lo) s->upd_lo = lo;
+        if (!s->updated || hi > s->upd_hi) s->upd_hi = hi;
+        s->upd_bloom |= blm; s->updated = 1;
+    }
 }
 /* updated is only a cheap rejection hint. A merged snapshot can contain thousands of untouched bindings after
    one tiny update. The retained ordered log proves the requested subrange, including partial overlays; the
@@ -4368,6 +4842,7 @@ static void snap_note_update(uint64_t lo, uint64_t n) {
 static int snap_range_updated(const snap_t *sn, uint64_t address, uint64_t size) {
     uint64_t end = address + size;
     if (!sn->updated || !g_nub || end <= g_ub_lo || address >= g_ub_hi) return 0;
+    if (totk_ub_fast_on() && (end <= sn->upd_lo || address >= sn->upd_hi || !(sn->upd_bloom & totk_ub_page_bloom(address, end)))) return 0;
     int a = 0, b = g_nub;
     while (a < b) { int m = (a + b) >> 1; if (g_ub[m].lo < end) a = m + 1; else b = m; }
     uint64_t floor = address > g_ub_maxlen ? address - g_ub_maxlen : 0;
@@ -4394,6 +4869,17 @@ static unsigned snapshot_replay_mask(void) {
 }
 static int arena_frozen_copy(arena_t *arena,VkBuffer buffer,VkDeviceSize offset,
         VkDeviceSize bytes,void *destination) {
+    if (totk_vk_fg_wb_fast_on() && arena->nchunk) {
+        int ov = 0;
+        int ci = totk_arena_bmap_find(&arena->bmap, (uint64_t)(uintptr_t)buffer, &ov);
+        if (!ov) {
+            if (ci < 0 || ci >= arena->nchunk) return 0;
+            const chunk_t *chunk = &arena->chunks[ci];
+            if (chunk->buf != buffer || offset > chunk->used || bytes > chunk->used - offset) return 0;
+            memcpy(destination, chunk->ptr + offset, (size_t)bytes);
+            return 1;
+        }
+    }
     for (int i=0;i<arena->nchunk;i++) {
         const chunk_t *chunk=&arena->chunks[i];
         if (chunk->buf!=buffer || offset>chunk->used || bytes>chunk->used-offset) continue;
@@ -4518,6 +5004,7 @@ static void snapshot_ubos_inner(const uint64_t *h, int n, void *capv) {   /* the
     if (cap->n > g_capsnap) { g_capsnap = cap->n + 256; g_snap = VK_REALLOC(g_snap, (size_t)g_capsnap * sizeof *g_snap); }
     VkDeviceSize align = V.props.limits.minUniformBufferOffsetAlignment; if (!align) align = 256;
     static int *idx; static int icap;
+    int check_ub = !totk_vk_load_wb_fast_on() || totk_ub_has_after((uint32_t)g_ub_unflushed + (uint32_t)g_ub_unsealed.count, g_ub_max_fence, cap->done);
     for (int i = 0; i < cap->n; i++) {
         uint64_t lo = cap->lo[i], hi = cap->hi[i], sz = hi - lo, shift = lo % align;
         VkBuffer b; VkDeviceSize o; uint8_t *p = arena_alloc(snap_arena(), (size_t)(sz + shift), align, &b, &o);
@@ -4529,14 +5016,15 @@ static void snapshot_ubos_inner(const uint64_t *h, int n, void *capv) {   /* the
             if (cap->bytes) g_rec.snapshot_staged += sz; else g_rec.snapshot_direct += sz;
         }
         /* inline updates of earlier submissions that were not in memory at the capture */
-        int m; for (;;) { m = ub_overlaps(lo, hi, 0, idx, icap); if (m >= 0) break; icap = icap ? 2 * icap : 64; idx = VK_REALLOC(idx, (size_t)icap * sizeof *idx); }
+        int m = 0;
+        if (check_ub) { for (;;) { m = ub_overlaps(lo, hi, 0, idx, icap); if (m >= 0) break; icap = icap ? 2 * icap : 64; idx = VK_REALLOC(idx, (size_t)icap * sizeof *idx); } }
         for (int k = 0; k < m; k++) {
             const ub_ent *e = &g_ub[idx[k]];
             if (e->fence && e->fence <= cap->done) continue;
             uint64_t a = e->lo > lo ? e->lo : lo, z = e->hi < hi ? e->hi : hi;
             memcpy(p + (a - lo), e->data + (a - e->lo), (size_t)(z - a));
         }
-        g_snap[g_nsnap++] = (snap_t){lo, hi, b, o, p, 0, 0};
+        g_snap[g_nsnap++] = (snap_t){lo, hi, b, o, p, 0, 0, 0, 0, 0};
         g_stat_snap_bytes += sz;
     }
     g_stat_snap_ranges += (uint64_t)g_nsnap;
@@ -4552,10 +5040,22 @@ int vk_ub_rename(uint64_t addr, uint64_t size, VkDescriptorBufferInfo *out) {
        same as last time. */
     enum { NM = 1024 };
     static struct { uint64_t addr, size, gen, sub; const void *sn; int ret; VkDescriptorBufferInfo d; } memo[NM];
-    uint64_t msub = vk_submit_serial(); unsigned mh = (unsigned)((addr >> 4) ^ (addr >> 14) ^ (size * 2654435761u)) % NM;
-    if (memo[mh].addr == addr && memo[mh].size == size && memo[mh].gen == g_ub_gen && memo[mh].sub == msub && memo[mh].sn == (const void *)sn) { if (memo[mh].ret) *out = memo[mh].d; return memo[mh].ret; }
+    static totk_ub_rename_memo4 ren4;
+    uint64_t msub = vk_submit_serial(), sn_tag = (uint64_t)(uintptr_t)sn;
+    int fast = totk_ub_fast_on();
+    if (fast) {
+        int ret = 0; uint64_t bu = 0, of = 0, rn = 0;
+        if (totk_ub_ren_get(&ren4, addr, size, g_ub_gen, msub, sn_tag, &ret, &bu, &of, &rn)) {
+            if (ret) *out = (VkDescriptorBufferInfo){(VkBuffer)(uintptr_t)bu, (VkDeviceSize)of, (VkDeviceSize)rn};
+            return ret;
+        }
+    } else {
+        unsigned mh = (unsigned)((addr >> 4) ^ (addr >> 14) ^ (size * 2654435761u)) % NM;
+        if (memo[mh].addr == addr && memo[mh].size == size && memo[mh].gen == g_ub_gen && memo[mh].sub == msub && memo[mh].sn == (const void *)sn) { if (memo[mh].ret) *out = memo[mh].d; return memo[mh].ret; }
+    }
     int ret = ub_rename_slow(addr, size, sn, out);
-    memo[mh].addr = addr; memo[mh].size = size; memo[mh].gen = g_ub_gen; memo[mh].sub = msub; memo[mh].sn = sn; memo[mh].ret = ret; if (ret) memo[mh].d = *out;
+    if (fast) totk_ub_ren_put(&ren4, addr, size, g_ub_gen, msub, sn_tag, ret, ret ? (uint64_t)(uintptr_t)out->buffer : 0u, ret ? (uint64_t)out->offset : 0u, ret ? (uint64_t)out->range : 0u);
+    else { unsigned mh = (unsigned)((addr >> 4) ^ (addr >> 14) ^ (size * 2654435761u)) % NM; memo[mh].addr = addr; memo[mh].size = size; memo[mh].gen = g_ub_gen; memo[mh].sub = msub; memo[mh].sn = sn; memo[mh].ret = ret; if (ret) memo[mh].d = *out; }
     return ret;
 }
 static int ub_rename_slow(uint64_t addr, uint64_t size, const snap_t *sn, VkDescriptorBufferInfo *out) {
@@ -4581,9 +5081,18 @@ static int ub_rename_slow(uint64_t addr, uint64_t size, const snap_t *sn, VkDesc
     /* the same range with the same newest update in this submission: the copy made for it is still right */
     enum { NC = 256 };
     static struct { uint64_t addr, size, seq, sub; const void *base; VkDescriptorBufferInfo d; } cache[NC];
-    uint64_t newest = n ? g_ub[idx[n - 1]].seq : 0, sub = vk_submit_serial();
-    unsigned h = (unsigned)((addr >> 4) ^ (addr >> 16) ^ size) % NC;
-    if (cache[h].addr == addr && cache[h].size == size && cache[h].seq == newest && cache[h].sub == sub && cache[h].base == (const void *)sn) { *out = cache[h].d; return 1; }
+    static totk_ub_copy_memo4 cpy4;
+    uint64_t newest = n ? g_ub[idx[n - 1]].seq : 0, sub = vk_submit_serial(), sn_tag = (uint64_t)(uintptr_t)sn;
+    int fast = totk_ub_fast_on();
+    if (fast) {
+        uint64_t bu = 0, of = 0, rn = 0;
+        if (totk_ub_cpy_get(&cpy4, addr, size, newest, sub, sn_tag, &bu, &of, &rn)) {
+            *out = (VkDescriptorBufferInfo){(VkBuffer)(uintptr_t)bu, (VkDeviceSize)of, (VkDeviceSize)rn}; return 1;
+        }
+    } else {
+        unsigned h = (unsigned)((addr >> 4) ^ (addr >> 16) ^ size) % NC;
+        if (cache[h].addr == addr && cache[h].size == size && cache[h].seq == newest && cache[h].sub == sub && cache[h].base == (const void *)sn) { *out = cache[h].d; return 1; }
+    }
     VkBuffer tb; VkDeviceSize to;
     uint8_t *p = vk_transient(size, align, &tb, &to);
     ft_snapshot_allocation(size);
@@ -4594,7 +5103,8 @@ static int ub_rename_slow(uint64_t addr, uint64_t size, const snap_t *sn, VkDesc
         memcpy(p + (lo - addr), e->data + (lo - e->lo), (size_t)(hi - lo));
     }
     *out = (VkDescriptorBufferInfo){tb, to, size};
-    cache[h].addr = addr; cache[h].size = size; cache[h].seq = newest; cache[h].sub = sub; cache[h].base = sn; cache[h].d = *out;
+    if (fast) totk_ub_cpy_put(&cpy4, addr, size, newest, sub, sn_tag, (uint64_t)(uintptr_t)tb, (uint64_t)to, size);
+    else { unsigned h = (unsigned)((addr >> 4) ^ (addr >> 16) ^ size) % NC; cache[h].addr = addr; cache[h].size = size; cache[h].seq = newest; cache[h].sub = sub; cache[h].base = sn; cache[h].d = *out; }
     g_stat_ub_renamed++;
     return 1;
 }
@@ -4882,6 +5392,23 @@ static void lag_guard_mark(uint64_t addr, uint64_t size, unsigned reason) {
 }
 /* The alias graph changes only when pool mappings change. Reuse its exact range projection instead of scanning every
    virtual mapping for every frame's merged guards. Cached arrays are walking-thread-owned, like the guard list. */
+static totk_alias_buf_idx_t g_alias_idx;
+static int alias_idx_sync_locked(void) {
+    uint64_t sgen = atomic_load_explicit(&g_span_gen, memory_order_relaxed);
+    if (g_alias_idx.gen == sgen && g_alias_idx.n == g_nalias) return 1;
+    if (!totk_alias_buf_sync_begin(&g_alias_idx, g_nalias, sgen)) return 0;
+    for (int i = 0; i < g_nalias; i++) totk_alias_buf_push(&g_alias_idx, i, (uint64_t)(uintptr_t)g_alias[i].owner->buf);
+    return 1;
+}
+static void alias_range_append(rng_t **rp, int *np, int *capp, const alias_ent *a, uint64_t addr, uint64_t off, uint64_t len) {
+    uint64_t lo = off > a->off ? off : a->off, end = a->off + a->end - a->va;
+    uint64_t hi = off + len < end ? off + len : end;
+    if (lo >= hi) return;
+    if (*np + 2 > *capp) { *capp = *capp ? *capp * 2 : 64; *rp = VK_REALLOC(*rp, (size_t)*capp * sizeof **rp); }
+    (*rp)[(*np)++] = (rng_t){a->va + lo - a->off, a->va + hi - a->off};
+    if (addr >= a->va && addr < a->end && a->off + addr - a->va == off)
+        (*rp)[(*np)++] = (rng_t){a->owner->base + off, a->owner->base + off + len};
+}
 typedef struct { uint64_t lo, hi, gen; rng_t *r; int n, cap; } lag_alias_cache;
 static const rng_t *lag_alias_ranges(rng_t r, int *count) {
     enum { NA = 2048 };
@@ -4891,22 +5418,18 @@ static const rng_t *lag_alias_ranges(rng_t r, int *count) {
     uint64_t gen = atomic_load_explicit(&g_span_gen, memory_order_acquire);
     if (c->lo == r.lo && c->hi == r.hi && c->gen == gen) { *count = c->n; return c->r; }
     pthread_mutex_lock(&g_pool_mu);
+    int use_idx = totk_vk_touch_alias_fast_on() && alias_idx_sync_locked();
     c->n = 0;
     for (uint64_t addr = r.lo; addr < r.hi; ) {
         VkBuffer b; uint64_t off, avail;
         if (!resolve_span(addr, 1, &b, &off, &avail)) { addr += page_sz(); continue; }
         uint64_t len = r.hi - addr; if (len > avail) len = avail;
-        for (int i = 0; i < g_nalias; i++) {
-            const alias_ent *a = &g_alias[i];
-            if (a->owner->buf != b) continue;
-            uint64_t lo = off > a->off ? off : a->off, end = a->off + a->end - a->va;
-            uint64_t hi = off + len < end ? off + len : end;
-            if (lo < hi) {
-                if (c->n + 2 > c->cap) { c->cap = c->cap ? c->cap * 2 : 64; c->r = VK_REALLOC(c->r, (size_t)c->cap * sizeof *c->r); }
-                c->r[c->n++] = (rng_t){a->va + lo - a->off, a->va + hi - a->off};
-                if (addr >= a->va && addr < a->end && a->off + addr - a->va == off)
-                    c->r[c->n++] = (rng_t){a->owner->base + off, a->owner->base + off + len};
-            }
+        uint64_t bkey = (uint64_t)(uintptr_t)b;
+        if (use_idx) {
+            for (int i = totk_alias_buf_first(&g_alias_idx, bkey); i >= 0; i = totk_alias_buf_next(&g_alias_idx, i, bkey))
+                alias_range_append(&c->r, &c->n, &c->cap, &g_alias[i], addr, off, len);
+        } else {
+            for (int i = 0; i < g_nalias; i++) if (g_alias[i].owner->buf == b) alias_range_append(&c->r, &c->n, &c->cap, &g_alias[i], addr, off, len);
         }
         addr += len;
     }
@@ -5016,31 +5539,29 @@ static int lag_software_exclude_aliases(uint64_t lo, uint64_t hi) {
     for (int i = 0; i < count; i++) if (!lag_software_exclude(aliases[i].lo, aliases[i].hi)) return 0;
     return 1;
 }
+_Static_assert(sizeof(rng_t) == 16 && offsetof(rng_t, lo) == 0 && offsetof(rng_t, hi) == 8, "rng_t layout");
 static int lag_software_build_exclusions(uint64_t done) {
-    g_lag_software_count = 0;
-    int ok = 1;
+    g_lag_software_count = 0; int ok = 1, fast = totk_vk_load_wb_fast_on();
     pthread_mutex_lock(&g_gw_mu);
-    for (int i = 0; ok && i < g_ngw; i++)
-        if (!g_gw[i].fence || g_gw[i].fence > done) ok = lag_software_exclude_aliases(g_gw[i].lo, g_gw[i].hi);
+    if (!fast || totk_ub_has_after(g_gw_unsealed.count, g_gw_max_fence, done)) {
+        for (int i = 0; ok && i < g_ngw; i++) if (!g_gw[i].fence || g_gw[i].fence > done) ok = lag_software_exclude_aliases(g_gw[i].lo, g_gw[i].hi);
+    }
     pthread_mutex_unlock(&g_gw_mu);
-    for (int i = 0; ok && i < g_nub; i++)
-        if (g_ub[i].flushed && (!g_ub[i].fence || g_ub[i].fence > done)) ok = lag_software_exclude_aliases(g_ub[i].lo, g_ub[i].hi);
+    if (!fast || totk_ub_has_after((uint32_t)g_ub_unsealed.count, g_ub_max_fence, done)) {
+        for (int i = 0; ok && i < g_nub; i++) if (g_ub[i].flushed && (!g_ub[i].fence || g_ub[i].fence > done)) ok = lag_software_exclude_aliases(g_ub[i].lo, g_ub[i].hi);
+    }
     for (size_t i = 0; ok && i < g_lag_record_count; i++) {
         const lag_record_pending *r = &g_lag_record_pending[i];
         if (r->reason & (NVN_DIRTY_LAG_GPU | NVN_DIRTY_LAG_WRITABLE)) ok = lag_software_exclude(r->lo, r->hi);
     }
-    if (!ok) return 0;   /* no software registration may proceed with incomplete exclusions */
-    if (g_lag_software_count > 1)
-        qsort(g_lag_software_exclusions, g_lag_software_count, sizeof *g_lag_software_exclusions, rng_cmp);
+    if (!ok) return 0;
+    if (fast) { g_lag_software_count = totk_rng_sort_coalesce((uint64_t *)g_lag_software_exclusions, g_lag_software_count); return 1; }
+    if (g_lag_software_count > 1) qsort(g_lag_software_exclusions, g_lag_software_count, sizeof *g_lag_software_exclusions, rng_cmp);
     size_t count = 0;
-    for (size_t i = 0; i < g_lag_software_count; i++) {
-        rng_t r = g_lag_software_exclusions[i];
-        if (count && r.lo <= g_lag_software_exclusions[count - 1].hi) {
-            if (r.hi > g_lag_software_exclusions[count - 1].hi) g_lag_software_exclusions[count - 1].hi = r.hi;
-        } else g_lag_software_exclusions[count++] = r;
-    }
-    g_lag_software_count = count;
-    return 1;
+    for (size_t i = 0; i < g_lag_software_count; i++) { rng_t r = g_lag_software_exclusions[i];
+        if (count && r.lo <= g_lag_software_exclusions[count - 1].hi) { if (r.hi > g_lag_software_exclusions[count - 1].hi) g_lag_software_exclusions[count - 1].hi = r.hi; }
+        else g_lag_software_exclusions[count++] = r; }
+    g_lag_software_count = count; return 1;
 }
 static int lag_software_excluded(uint64_t lo, uint64_t hi) {
     size_t a = 0, b = g_lag_software_count;
@@ -5643,9 +6164,12 @@ int vk_ub_replay_read(uint64_t addr, uint64_t size, VkDeviceSize align, VkDescri
     if (!addr || !size || addr+size<addr) return 0;
     addr=ub_address(addr,size);
     if (!addr || addr+size<addr) return 0;
-    pthread_mutex_lock(&g_gw_mu);
-    int pending=gw_pending(addr,addr+size,atomic_load_explicit(&g_done,memory_order_acquire));
-    pthread_mutex_unlock(&g_gw_mu);
+    int pending = 0;
+    if (!totk_gw_fast_on() || totk_gw_may_overlap(&g_gw_sum, addr, addr + size)) {
+        pthread_mutex_lock(&g_gw_mu);
+        pending = gw_pending(addr, addr + size, atomic_load_explicit(&g_done, memory_order_acquire));
+        pthread_mutex_unlock(&g_gw_mu);
+    }
     if (pending) return 0;
     return lag_uniform_select(addr,size,align,out,1);
 }
@@ -5698,17 +6222,32 @@ void vk_ub_read(uint64_t addr, void *dst, size_t size) {
     const snap_t *sn = g_nsnap ? snap_find(addr, size) : NULL;
     enum { NC = 128, BYTES = 32 };
     static struct { uint64_t address, size, revision, submission; const snap_t *snapshot; uint8_t bytes[BYTES]; } memo[NC];
+    static totk_ub_ptr_memo4 ptr4;
     if (!vk_record_enabled() || !sn || !sn->updated || size > BYTES) { ub_read_from(addr, dst, size, sn); return; }
-    __typeof__(memo[0]) *m = &memo[(unsigned)((addr >> 3) ^ (addr >> 16) ^ size) % NC];
-    uint64_t submission = vk_submit_serial();
-    if (m->address == addr && m->size == size && m->snapshot == sn && m->submission == submission &&
-        (m->revision == g_ub_gen || vk_record_uniform_unchanged(m->revision, addr, size))) {
-        memcpy(dst, m->bytes, size); m->revision = g_ub_gen;
-        if (vk_rec_profile_on && T_rec.active) g_rec.pointer_hits++;
-        return;
+    uint64_t submission = vk_submit_serial(), sn_tag = (uint64_t)(uintptr_t)sn;
+    int fast = totk_ub_fast_on();
+    if (fast) {
+        totk_ub_ptr_ent *e = totk_ub_ptr_find(&ptr4, addr, size, submission, sn_tag);
+        if (e && (e->revision == g_ub_gen || vk_record_uniform_unchanged(e->revision, addr, size))) {
+            memcpy(dst, e->bytes, size); e->revision = g_ub_gen;
+            if (vk_rec_profile_on && T_rec.active) g_rec.pointer_hits++;
+            return;
+        }
+    } else {
+        __typeof__(memo[0]) *m = &memo[(unsigned)((addr >> 3) ^ (addr >> 16) ^ size) % NC];
+        if (m->address == addr && m->size == size && m->snapshot == sn && m->submission == submission &&
+            (m->revision == g_ub_gen || vk_record_uniform_unchanged(m->revision, addr, size))) {
+            memcpy(dst, m->bytes, size); m->revision = g_ub_gen;
+            if (vk_rec_profile_on && T_rec.active) g_rec.pointer_hits++;
+            return;
+        }
     }
     ub_read_from(addr, dst, size, sn);
-    m->address = addr; m->size = size; m->snapshot = sn; m->submission = submission; m->revision = g_ub_gen; memcpy(m->bytes, dst, size);
+    if (fast) totk_ub_ptr_put(&ptr4, addr, size, g_ub_gen, submission, sn_tag, dst);
+    else {
+        __typeof__(memo[0]) *m = &memo[(unsigned)((addr >> 3) ^ (addr >> 16) ^ size) % NC];
+        m->address = addr; m->size = size; m->snapshot = sn; m->submission = submission; m->revision = g_ub_gen; memcpy(m->bytes, dst, size);
+    }
     if (vk_rec_profile_on && T_rec.active) g_rec.pointer_misses++;
 }
 /* Return the authority that supplies every byte without a mutable native gap: explicit immutable snapshot (1),
@@ -5769,6 +6308,7 @@ void vk_ub_read_record(uint64_t addr, void *dst, size_t size) {
 uint64_t vk_record_test_pointer_hits(void) { return g_rec.pointer_hits; }
 #endif
 static void update_ub(uint64_t dst, const uint8_t *data, uint64_t n) {
+    vk_gpu_write_bump();
     VkBuffer db; uint64_t dof;
     if (n <= 64) vk_pd_write_note("inline update", dst, n, data);
     int ok = vk_resolve(dst, n, &db, &dof);
@@ -5777,9 +6317,12 @@ static void update_ub(uint64_t dst, const uint8_t *data, uint64_t n) {
     if (ub_rename_on()) { ub_log(dst, data, n, 0); return; }
     if (ub_private_on()) {
         uint64_t a = ub_address(dst, n);
-        pthread_mutex_lock(&g_gw_mu);
-        int gpu = gw_pending(a, a + n, atomic_load(&g_done));
-        pthread_mutex_unlock(&g_gw_mu);
+        int gpu = 0;
+        if (!totk_gw_fast_on() || totk_gw_may_overlap(&g_gw_sum, a, a + n)) {
+            pthread_mutex_lock(&g_gw_mu);
+            gpu = gw_pending(a, a + n, atomic_load(&g_done));
+            pthread_mutex_unlock(&g_gw_mu);
+        }
         if (!gpu && !ub_original_pending(a, n)) { ub_log(dst, data, n, 0); return; }
         vk_gpu_write(dst, n);   /* a true original-memory producer cannot be replaced by a stale CPU base */
     }
@@ -5819,11 +6362,25 @@ void mtl_sub_counter(uint64_t addr, uint32_t type) {
 void mtl_sub_index(const uint64_t *h, int n) { (void)h; (void)n; }
 void mtl_exec_rest(const uint64_t *h, int n) { (void)h; (void)n; }
 void vk_note_draw(void) { g_stat_draw++; }
-static void ub_seal(uint64_t fence) { for (int i = 0; i < g_nub; i++) if (g_ub[i].flushed && !g_ub[i].fence) g_ub[i].fence = fence; ub_changed(0, 0); }
+static void ub_seal(uint64_t fence) {
+    if (totk_vk_touch_alias_fast_on()) {
+        if (g_ub_unsealed.count > 0) {
+            int lo = g_ub_unsealed.lo < 0 ? 0 : g_ub_unsealed.lo;
+            int hi = g_ub_unsealed.hi > g_nub ? g_nub : g_ub_unsealed.hi;
+            for (int i = lo; i < hi; i++) if (g_ub[i].flushed && !g_ub[i].fence) { g_ub[i].fence = fence; if (fence > g_ub_max_fence) g_ub_max_fence = fence; totk_fence_min_note(&g_ub_min_fence, fence); }
+            totk_ub_unsealed_reset(&g_ub_unsealed);
+        }
+        ub_changed(0, 0);
+        return;
+    }
+    for (int i = 0; i < g_nub; i++) if (g_ub[i].flushed && !g_ub[i].fence) { g_ub[i].fence = fence; if (fence > g_ub_max_fence) g_ub_max_fence = fence; totk_fence_min_note(&g_ub_min_fence, fence); }
+    totk_ub_unsealed_reset(&g_ub_unsealed);
+    ub_changed(0, 0);
+}
 
 /* A bounded draw-side lookahead never escapes the current recording or follows calls. Restored on recursive return. */
 static const uint8_t *g_exec_next; static uint32_t g_exec_op;
-const uint8_t *vk_exec_draw_next(void) { return g_exec_op == OP_DRAW || g_exec_op == OP_DRAW_IDX ? g_exec_next : NULL; }
+const uint8_t *vk_exec_draw_next(void) { return g_exec_op == OP_DRAW || g_exec_op == OP_DRAW_IDX || g_exec_op == OP_DRAW_INDIRECT || g_exec_op == OP_DRAW_IDX_INDIRECT ? g_exec_next : NULL; }
 /* Constant specialization removes all diagnostic work from the disabled opcode loop, including bind checks. */
 static __attribute__((always_inline)) inline void mtl_exec_impl(const uint8_t *p, int diagnostics) {
     const uint8_t *saved_next = g_exec_next; uint32_t saved_op = g_exec_op;
@@ -5850,7 +6407,7 @@ static __attribute__((always_inline)) inline void mtl_exec_impl(const uint8_t *p
         g_exec_next = next; g_exec_op = h.op;
         if (diagnostics) {
             if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) xlate_deferred_bind(h.op, a);
-            if (h.op == OP_DRAW || h.op == OP_DRAW_IDX) {
+            if (h.op == OP_DRAW || h.op == OP_DRAW_IDX || h.op == OP_DRAW_INDIRECT || h.op == OP_DRAW_IDX_INDIRECT) {
                 g_xlate->counts.draws++;
                 for (unsigned lane = 0; lane < 2; lane++) {
                     g_xlate->counts.repeated_draws[lane] += g_xlate->repeated[lane];
@@ -5873,7 +6430,7 @@ static __attribute__((always_inline)) inline void mtl_exec_impl(const uint8_t *p
                 if (__builtin_expect(vk_rec_timing_on, 0)) {
                     int category = h.op == OP_RESET_COUNTER || h.op == OP_RENDER_COND ? VK_REC_S_COUNTER :
                         h.op == OP_SET_RT || h.op == OP_CLEAR_COLOR || h.op == OP_CLEAR_DS || h.op == OP_BARRIER ? VK_REC_S_PASS :
-                        h.op == OP_DRAW || h.op == OP_DRAW_IDX ? VK_REC_S_TOUCH : VK_REC_S_STATE;
+                        h.op == OP_DRAW || h.op == OP_DRAW_IDX || h.op == OP_DRAW_INDIRECT || h.op == OP_DRAW_IDX_INDIRECT ? VK_REC_S_TOUCH : VK_REC_S_STATE;
                     VK_REC_DO(category, vk_draw_exec(h.op, a));
                 } else vk_draw_exec(h.op, a);
                 break;
@@ -6020,7 +6577,7 @@ void vk_mem_report(void) {
 uint64_t vk_submit_now(void) { return g_cur ? slot_submit(0, VK_PASS_END_SUBMISSION) : mtl_last_fence(); }
 uint64_t vk_submit_readback(void) { return g_cur ? slot_submit(0, VK_PASS_END_CPU_WAIT) : mtl_last_fence(); }
 void vk_flush_wait(void) { HK_ADD(idle_flush, 1); if (ub_private_on()) ub_flush(); if (g_cur) { uint64_t v = slot_submit(0, VK_PASS_END_CPU_WAIT); wait_value(v); } else vk_gpu_idle(); }
-uint64_t mtl_last_fence(void) { pthread_mutex_lock(&g_mu); uint64_t f = g_reserved_fence; pthread_mutex_unlock(&g_mu); return f; }
+uint64_t mtl_last_fence(void) { if (img_fast_nvn_on()) return __atomic_load_n(&g_reserved_fence, __ATOMIC_ACQUIRE); pthread_mutex_lock(&g_mu); uint64_t f = __atomic_load_n(&g_reserved_fence, __ATOMIC_ACQUIRE); pthread_mutex_unlock(&g_mu); return f; }
 int mtl_wait(uint64_t fence, uint64_t timeout_ns) {
     if (atomic_load(&g_done) >= fence) return 1;
     if (!timeout_ns) return 0;
@@ -6030,7 +6587,7 @@ int mtl_wait(uint64_t fence, uint64_t timeout_ns) {
     uint64_t w0 = host_now_ns();
     pthread_mutex_lock(&g_mu);
     int blocked = atomic_load(&g_done) < fence;
-    while (atomic_load(&g_done) < fence) if (pthread_cond_timedwait(&g_cv, &g_mu, &dl)) break;
+    while (atomic_load(&g_done) < fence) if (nvn_cv_timedwait(&dl)) break;
     int ok = atomic_load(&g_done) >= fence;
     if (blocked && ok && g_done_at) HK_ADD(wake_ns, host_now_ns() - g_done_at);
     pthread_mutex_unlock(&g_mu);

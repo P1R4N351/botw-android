@@ -35,11 +35,14 @@
 #define R_APPEND_REQUIRED 0x2f5e02u
 #ifdef GAME_BOTW
 #define TOTK_APPLICATION_ID 0x01007ef00011e000ULL   /* Breath of the Wild: its own save data is the one that exists */
+#elif defined(GAME_HWAOC)
+#define TOTK_APPLICATION_ID 0x01002b00111a2000ULL   /* Hyrule Warriors: Age of Calamity */
 #else
 #define TOTK_APPLICATION_ID 0x0100f2c0115b6000ULL
 #endif
 enum { M_FREE, M_SAVE, M_TEMP, M_CACHE };
 enum { OPEN_READ = 1, OPEN_WRITE = 2, OPEN_APPEND = 4 };
+#include "totk_fs_fast.h"
 #define FILE_BASE 0x200000000ULL
 #define DIR_BASE 0x300000000ULL
 #define NFILES 1024
@@ -52,6 +55,13 @@ static Mount mounts[16];
 static File files[NFILES];
 static Dir dirs[NDIRS];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int mnt_pub[16];
+static totk_fs_mnt_table mnt_fast = {.epoch = 1};
+static _Atomic uint64_t fd_fast[NFILES];
+static void mnt_fast_rebuild_locked(void) {
+    uint64_t ep = totk_fs_mnt_begin(&mnt_fast);
+    for (int i = 0; i < 16; i++) if (mounts[i].kind) totk_fs_mnt_insert(&mnt_fast, ep, mounts[i].name, strlen(mounts[i].name), i);
+}
 static char profile[1024], save_root[1024];
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 
@@ -60,6 +70,7 @@ static void need(int c, const char *m) { if (!c) runtime_fail(m); }
 /* Save in progress: a save-data file open for writing, or save data changed in the last 3 s and not committed yet (TOTK
    writes a slot's files back to back and then commits; between the files nothing is open for a moment). */
 static _Atomic int save_writers, save_dirty;
+static _Atomic uint64_t g_save_commits;
 static _Atomic uint64_t save_changed_ns;
 /* TOTK_SAVE_BUSY (Android: <private>/state/save-busy) exists from the first change to save data until the Commit that
    completes the save, which removes it just before it publishes the next save generation: the launcher's mirror, in
@@ -89,6 +100,7 @@ int runtime_fs_save_busy(void) {
 }
 /* Unlike the UI's short busy heuristic, suspension must wait through Commit,
    however long the gap between files. No locks or I/O on the acquire path. */
+uint64_t runtime_fs_save_commits(void) { return atomic_load_explicit(&g_save_commits, memory_order_relaxed); }
 int runtime_fs_save_pending(void) {
     return atomic_load(&save_marked) || atomic_load(&save_writers) > 0 || atomic_load(&save_dirty);
 }
@@ -136,6 +148,8 @@ static unsigned mount_add(const char *name, int kind, const char *root) {
     for (int i = 0; i < 16; i++) { if (mounts[i].kind && !strcmp(mounts[i].name, name)) { pthread_mutex_unlock(&lock); return R_ALREADY_EXISTS; } if (!mounts[i].kind && slot < 0) slot = i; }
     if (slot < 0) runtime_fail("fs mount table full");
     mounts[slot].kind = kind; strcpy(mounts[slot].name, name); snprintf(mounts[slot].root, sizeof mounts[slot].root, "%s", root);
+    atomic_store_explicit(&mnt_pub[slot], kind, memory_order_release);
+    mnt_fast_rebuild_locked();
     pthread_mutex_unlock(&lock);
     fprintf(stderr, "[totk] fs mount %s: -> %s\n", name, root);
     return 0;
@@ -147,13 +161,19 @@ static unsigned host_path_kind(const char *path, char *out, size_t cap, int *kin
     const char *colon = strchr(path, ':');
     if (!colon || colon[1] != '/') return R_INVALID_PATH;
     size_t n = (size_t)(colon - path);
-    pthread_mutex_lock(&lock);
-    const Mount *m = NULL;
-    for (int i = 0; i < 16; i++) if (mounts[i].kind && strlen(mounts[i].name) == n && !strncmp(mounts[i].name, path, n)) m = &mounts[i];
-    char root[1024]; if (m) strcpy(root, m->root);
-    int k = m ? m->kind : M_FREE;
-    pthread_mutex_unlock(&lock);
-    if (!m) return R_PATH_NOT_FOUND;
+    char root[1024]; int k = M_FREE; int hit = -1;
+    if (totk_fs_fast_active() && totk_fs_mnt_find(&mnt_fast, path, n, &hit) && hit >= 0 && hit < 16) {
+        k = atomic_load_explicit(&mnt_pub[hit], memory_order_acquire);
+        if (k > 0) snprintf(root, sizeof root, "%s", mounts[hit].root);
+    }
+    if (k <= 0) {
+        pthread_mutex_lock(&lock);
+        const Mount *m = NULL;
+        for (int i = 0; i < 16; i++) if (mounts[i].kind && strlen(mounts[i].name) == n && !strncmp(mounts[i].name, path, n)) m = &mounts[i];
+        if (m) { strcpy(root, m->root); k = m->kind; }
+        pthread_mutex_unlock(&lock);
+        if (!m) return R_PATH_NOT_FOUND;
+    }
     if (kind) *kind = k;
     const char *rest = colon + 1;
     for (const char *q = rest + 1; *q;) { const char *e = strchr(q, '/'); size_t len = e ? (size_t)(e - q) : strlen(q); if (!e && !len) break; if (!component_ok(q, len) || memchr(q, '\\', len)) return R_INVALID_PATH; q = e ? e + 1 : q + len; }
@@ -179,6 +199,12 @@ static unsigned mount_save(const char *name, const uint64_t *uid) {
 static unsigned char save_exists(uint64_t application, const uint64_t *uid) {
     ready(); uint64_t me[2]; runtime_account_uid(me);
     return application == TOTK_APPLICATION_ID && uid && uid[0] == me[0] && uid[1] == me[1];
+}
+static unsigned ensure_save(const uint64_t *uid) {
+    ready(); uint64_t me[2]; runtime_account_uid(me);
+    if (!uid || uid[0] != me[0] || uid[1] != me[1]) return R_TARGET_NOT_FOUND;
+    make_dir(save_root);
+    return 0;
 }
 /* Other titles' save data (e.g. data-link bonuses) is not present on this host. */
 static unsigned mount_save_ro(const char *name, uint64_t application, const uint64_t *uid) {
@@ -261,6 +287,7 @@ static unsigned commit(const char *name) {
         save_unmark();
         if (atomic_load(&save_dirty)) save_mark();   /* the next save began while this one ended */
         save_generation_bump();
+        atomic_fetch_add_explicit(&g_save_commits, 1, memory_order_relaxed);
     }
     return 0;
 }
@@ -268,7 +295,13 @@ static unsigned commit(const char *name) {
 /* ---------- files ---------- */
 static File *file_of(uint64_t h, int *fd, int *mode) {
     if (h < FILE_BASE || h >= FILE_BASE + NFILES) return NULL;
-    pthread_mutex_lock(&lock); File *f = &files[h - FILE_BASE]; int v = f->fd; if (fd) *fd = f->fd; if (mode) *mode = f->mode; pthread_mutex_unlock(&lock);
+    uint64_t idx = h - FILE_BASE;
+    if (totk_fs_fast_active()) {
+        uint64_t w = atomic_load_explicit(&fd_fast[idx], memory_order_acquire);
+        int fdv = totk_fs_fd_unpack_fd(w);
+        if (fdv > 0) { if (fd) *fd = fdv; if (mode) *mode = totk_fs_fd_unpack_mode(w); return &files[idx]; }
+    }
+    pthread_mutex_lock(&lock); File *f = &files[idx]; int v = f->fd; if (fd) *fd = f->fd; if (mode) *mode = f->mode; pthread_mutex_unlock(&lock);
     return v > 0 ? f : NULL;
 }
 void runtime_fs_log(const char *what, const char *path);
@@ -284,7 +317,7 @@ static unsigned open_file(uint64_t *out, const char *path, int mode) {
     runtime_autoload_save_file_opened(path);   /* TOTK_AUTOLOAD: a slot's caption.sav starts the presses, its progress.sav ends them */
     pthread_mutex_lock(&lock);
     for (int i = 0; i < NFILES; i++) if (files[i].fd <= 0) {
-        files[i] = (File){fd, mode, save_writer}; *out = FILE_BASE + (uint64_t)i; pthread_mutex_unlock(&lock);
+        files[i] = (File){fd, mode, save_writer}; atomic_store_explicit(&fd_fast[i], totk_fs_fd_pack(fd, mode, save_writer), memory_order_release); *out = FILE_BASE + (uint64_t)i; pthread_mutex_unlock(&lock);
         if (save_writer) { atomic_fetch_add(&save_writers, 1); save_touched(); }
         return 0;
     }
@@ -324,14 +357,15 @@ static unsigned file_size(int64_t *out, uint64_t h) {
 static unsigned set_file_size(uint64_t h, int64_t size) {
     int fd, mode; if (size < 0 || !file_of(h, &fd, &mode)) return R_INVALID_ARGUMENT;
     if (!(mode & OPEN_WRITE)) return R_OPEN_MODE;
-    if (files[h - FILE_BASE].save) save_touched();
+    uint64_t fw = atomic_load_explicit(&fd_fast[h - FILE_BASE], memory_order_acquire);
+    if (fw ? totk_fs_fd_unpack_save(fw) : files[h - FILE_BASE].save) save_touched();
     return ftruncate(fd, size) ? errno_result() : 0;
 }
 static unsigned flush_file(uint64_t h) { int fd; if (!file_of(h, &fd, NULL)) return R_INVALID_ARGUMENT; fcntl_fullfsync(fd); return 0; }
 static void close_file(uint64_t h) {
     if (runtime_romfs_handle(h)) { runtime_romfs_close(h); return; } BOTW_AOC_CLOSE(h)
     if (!file_of(h, NULL, NULL)) runtime_fail("close invalid file handle");
-    pthread_mutex_lock(&lock); int fd = files[h - FILE_BASE].fd, save = files[h - FILE_BASE].save; files[h - FILE_BASE].fd = 0; pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&lock); int fd = files[h - FILE_BASE].fd, save = files[h - FILE_BASE].save; files[h - FILE_BASE].fd = 0; atomic_store_explicit(&fd_fast[h - FILE_BASE], 0ull, memory_order_release); pthread_mutex_unlock(&lock);
     close(fd);
     if (save) { save_touched(); atomic_fetch_sub(&save_writers, 1); }
 }
@@ -382,6 +416,30 @@ static void close_directory(uint64_t h) {
     if (h < DIR_BASE || h >= DIR_BASE + NDIRS || !dirs[h - DIR_BASE].dir) runtime_fail("close invalid directory handle");
     pthread_mutex_lock(&lock); closedir(dirs[h - DIR_BASE].dir); dirs[h - DIR_BASE].dir = NULL; pthread_mutex_unlock(&lock);
 }
+static unsigned dir_entry_count(int64_t *count, uint64_t h) {
+    enum { MAX_DIR_SCAN = 65536 };
+    if (h < DIR_BASE || h >= DIR_BASE + NDIRS || !count) return R_INVALID_ARGUMENT;
+    Dir *d = &dirs[h - DIR_BASE]; if (!d->dir) return R_INVALID_ARGUMENT;
+    DIR *scan = opendir(d->path); if (!scan) return errno_result();
+    int64_t n = 0; struct dirent *e = NULL;
+    for (unsigned guard = 0; guard < MAX_DIR_SCAN && (e = readdir(scan)) != NULL; guard++) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") || strlen(e->d_name) > 768) continue;
+        char child[2048]; snprintf(child, sizeof child, "%s/%s", d->path, e->d_name);
+        struct stat st; if (stat(child, &st)) continue;
+        int is_dir = S_ISDIR(st.st_mode);
+        if (d->mode & (is_dir ? 1 : 2)) n++;
+    }
+    closedir(scan); *count = n; return 0;
+}
+static void fs_set_allocator(void *alloc, void *dealloc) { (void)alloc; (void)dealloc; }
+#ifdef GAME_HWAOC
+static unsigned hwaoc_aoc_cache_size(uint64_t *out, int index) {
+    (void)index; if (!out) return R_INVALID_ARGUMENT; *out = 8; return 0;
+}
+static unsigned hwaoc_aoc_mount(const char *name, int index, void *cache, uint64_t size) {
+    (void)name; (void)index; (void)cache; (void)size; return R_PATH_NOT_FOUND;
+}
+#endif
 /* The fs priority only orders I/O inside the system fs process; host I/O is unordered. */
 static void set_priority(int priority) { (void)priority; }
 
@@ -429,13 +487,19 @@ void *runtime_fs_host_override(const char *name) {
         {"_ZN2nn2fs15CreateDirectoryEPKc", create_directory}, {"_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", delete_recursive},
         {"_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", open_directory},
         {"_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", read_directory},
+        {"_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE", dir_entry_count},
         {"_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", close_directory},
+        {"_ZN2nn2fs14EnsureSaveDataERKNS_7account3UidE", ensure_save},
         {"_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", mount_save},
         {"_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE", mount_save_ro},
         {"_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE", save_exists},
         {"_ZN2nn2fs21MountTemporaryStorageEPKc", mount_temp}, {"_ZN2nn2fs7UnmountEPKc", unmount}, {"_ZN2nn2fs6CommitEPKc", commit},
 #ifdef GAME_BOTW
         {"_ZN2nn2fs14CommitSaveDataEPKc", commit},   /* SDK 7 (Breath of the Wild 1.6.0) */
+#endif
+#ifdef GAME_HWAOC
+        {"_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", hwaoc_aoc_cache_size},
+        {"_ZN2nn2fs17MountAddOnContentEPKciPvm", hwaoc_aoc_mount},
 #endif
        
         {"_ZN2nn2fs18CreateCacheStorageEill", create_cache}, {"_ZN2nn2fs18DeleteCacheStorageEi", delete_cache},
@@ -444,6 +508,7 @@ void *runtime_fs_host_override(const char *name) {
         {"_ZN2nn2fs20ReadCacheStorageListEPiPNS0_16CacheStorageInfoENS0_22CacheStorageListHandleEi", read_cache_list},
         {"_ZN2nn2fs21CloseCacheStorageListENS0_22CacheStorageListHandleE", close_cache_list},
         {"_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", set_priority},
+        {"_ZN2nn2fs12SetAllocatorEPFPvmEPFvS1_mE", fs_set_allocator},
     };
     for (size_t i = 0; i < sizeof map / sizeof *map; i++) if (!strcmp(name, map[i].name)) return map[i].fn;
     return NULL;

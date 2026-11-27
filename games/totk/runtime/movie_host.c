@@ -45,6 +45,25 @@ int movie_host_active(void) { return 0; }
 #else
 #include <vpx/vp8dx.h>
 #include <vpx/vpx_decoder.h>
+#include "movie_nv12.h"
+#include "totk_movie_fast.h"
+#define TOTK_MOVIE_HOST_TU 1
+
+static int fast_nv12_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("TOTK_MOVIE_FAST_NV12"); v = !(e && *e == '0'); }
+    return v;
+}
+static int movie_mt_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("TOTK_MOVIE_MT"); v = !(e && *e == '0'); }
+    return v;
+}
+static void configure_vp9_mt(vpx_codec_ctx_t *vpx) {
+    if (!movie_mt_on()) return;
+    (void)vpx_codec_control(vpx, VP9D_SET_ROW_MT, 1);
+    (void)vpx_codec_control(vpx, VP9D_SET_LOOP_FILTER_OPT, 1);
+}
 
 enum { IN_BUFS = 4, IN_CAP = 2 << 20, OUT_BUFS = 8, MAX_MOVIES = 16 };
 enum { TYPE_VP9 = 3, MODE_BUFFER = 1, FORMAT_NV12 = 4, FLAG_EOS = 4 };
@@ -62,6 +81,7 @@ typedef struct {
     uint8_t *in[IN_BUFS]; int in_free[IN_BUFS], nin_free;
     Pending pending[IN_BUFS]; int npending;
     uint8_t *out[OUT_BUFS]; int out_bytes[OUT_BUFS], out_held[OUT_BUFS];
+    uint32_t held_mask, queued_mask;
     Ready ready[OUT_BUFS]; int nready;
     Ready decoded[OUT_BUFS]; int ndecoded;   /* paced: decoded, not due yet */
     uint64_t t0; int64_t pts0;               /* paced: host time and presentation time of the first frame handed over */
@@ -87,6 +107,7 @@ void movie_host_set_clock(uint64_t (*clock)(void)) { g_clock = clock ? clock : n
 #define MOVIE_PACE_DEFAULT GAME_DEFAULT_MOVIE_PACE
 static int pace_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("TOTK_MOVIE_PACE"); v = e ? strcmp(e, "0") != 0 : MOVIE_PACE_DEFAULT; } return v; }
 static Movie *g_movies[MAX_MOVIES];
+static totk_movie_table g_movie_fast_tbl;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Only lifecycle transitions write this count; present can observe activity
  * without changing decoder ownership or taking g_lock / Movie.mu. */
@@ -134,13 +155,20 @@ static void guest_init(void) {
         void *vt; need_symbol(&vt, "_ZTVN5movie7DecoderE"); G.vptr = (uint8_t *)vt + 0x10;
         for (int i = 0; i < MOVIE_ENTRIES; i++) need_symbol(&G.orig[i], NAMES[i]);
         g_ready = 1;
+        totk_movie_mark_ready(&g_movie_fast_tbl);
     }
     pthread_mutex_unlock(&g_lock);
 }
-void movie_host_set_guest(const MovieGuest *api) { pthread_mutex_lock(&g_lock); G = *api; g_ready = 1; pthread_mutex_unlock(&g_lock); }
+void movie_host_set_guest(const MovieGuest *api) {
+    pthread_mutex_lock(&g_lock); G = *api; g_ready = 1; totk_movie_mark_ready(&g_movie_fast_tbl); pthread_mutex_unlock(&g_lock);
+}
 
 static Movie *find(const void *guest) {
-    if (!g_ready) guest_init();
+    if (!totk_movie_is_ready(&g_movie_fast_tbl)) guest_init();
+    if (totk_movie_fast_on()) {
+        void *mv = NULL;
+        if (totk_movie_find_fast(&g_movie_fast_tbl, guest, &mv)) return (Movie *)mv;
+    }
     pthread_mutex_lock(&g_lock); Movie *m = NULL;
     for (int i = 0; i < MAX_MOVIES; i++) if (g_movies[i] && g_movies[i]->guest == guest) m = g_movies[i];
     pthread_mutex_unlock(&g_lock);
@@ -156,20 +184,19 @@ static int frame_bytes(const Movie *m) { return m->w * m->h + (m->w / 2) * (m->h
 
 /* I420 (libvpx) -> packed NV12: Y rows, then rows of interleaved U, V. */
 static void to_nv12(const vpx_image_t *img, uint8_t *dst, int w, int h) {
-    for (int y = 0; y < h; y++) memcpy(dst + (size_t)y * w, img->planes[VPX_PLANE_Y] + (size_t)y * img->stride[VPX_PLANE_Y], (size_t)w);
-    uint8_t *uv = dst + (size_t)w * h;
-    for (int y = 0; y < h / 2; y++) {
-        const uint8_t *u = img->planes[VPX_PLANE_U] + (size_t)y * img->stride[VPX_PLANE_U];
-        const uint8_t *v = img->planes[VPX_PLANE_V] + (size_t)y * img->stride[VPX_PLANE_V];
-        uint8_t *o = uv + (size_t)y * w; int x = 0;
-        if (negative() == 1) { const uint8_t *t = u; u = v; v = t; }
-        for (; x + 16 <= w / 2; x += 16) { uint8x16x2_t p = {{vld1q_u8(u + x), vld1q_u8(v + x)}}; vst2q_u8(o + 2 * x, p); }
-        for (; x < w / 2; x++) { o[2 * x] = u[x]; o[2 * x + 1] = v[x]; }
-    }
+    totk_movie_to_nv12(img->planes[VPX_PLANE_Y], img->stride[VPX_PLANE_Y],
+                       img->planes[VPX_PLANE_U], img->stride[VPX_PLANE_U],
+                       img->planes[VPX_PLANE_V], img->stride[VPX_PLANE_V],
+                       dst, w, h, negative() == 1, fast_nv12_on());
 }
-static int free_out(const Movie *m) { for (int i = 0; i < OUT_BUFS; i++) if (!m->out_held[i]) return i; return -1; }
+static int free_out(const Movie *m) {
+    if (totk_movie_fast_on()) return totk_movie_alloc_slot(m->held_mask);
+    for (int i = 0; i < OUT_BUFS; i++) if (!m->out_held[i]) return i;
+    return -1;
+}
 static void push_ready(Movie *m, Signals *s, int slot, unsigned flags, int64_t time, int bytes) {
     m->out_held[slot] = 1; m->out_bytes[slot] = bytes;
+    m->held_mask |= 1u << slot; m->queued_mask |= 1u << slot;
     if (pace_on()) { m->decoded[m->ndecoded++] = (Ready){slot, flags, time}; return; }
     m->ready[m->nready++] = (Ready){slot, flags, time};
     note(m, s, EV_OUTPUT);
@@ -185,7 +212,8 @@ static void release_due(Movie *m, Signals *s, uint64_t now) {
     while (m->ndecoded > 1 && !(m->decoded[0].flags & FLAG_EOS) && !(m->decoded[1].flags & FLAG_EOS) && m->t0) {
         uint64_t due = due_at(m, &m->decoded[0]), next = due_at(m, &m->decoded[1]);
         if (now < next || now - due <= (next - due) * 3 / 2) break;
-        m->out_held[m->decoded[0].index] = 0; m->dropped++;
+        int di = m->decoded[0].index;
+        m->out_held[di] = 0; m->held_mask &= ~(1u << di); m->queued_mask &= ~(1u << di); m->dropped++;
         memmove(m->decoded, m->decoded + 1, (size_t)--m->ndecoded * sizeof m->decoded[0]);
     }
     if (!m->ndecoded) return;
@@ -198,6 +226,9 @@ static void release_due(Movie *m, Signals *s, uint64_t now) {
     m->ready[m->nready++] = d; note(m, s, EV_OUTPUT);
 }
 void movie_host_tick(void) {   /* lock order g_lock -> Movie.mu, as in destroy; events fire after both are released */
+#ifdef TOTK_MOVIE_HOST_TU
+    if (totk_movie_fast_on() && !totk_movie_has_live(&g_movie_fast_tbl)) return;
+#endif
     Signals s = {0};
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < MAX_MOVIES; i++) {
@@ -225,7 +256,8 @@ void movie_host_tick(void) {   /* lock order g_lock -> Movie.mu, as in destroy; 
 static int decode_one(Movie *m, Signals *s, const Pending *p) {
     int need = p->size > 0 ? 1 : 0;
     if (p->flags & FLAG_EOS && !m->eos_in) need++;
-    int freeslots = 0; for (int i = 0; i < OUT_BUFS; i++) freeslots += !m->out_held[i];
+    int freeslots = totk_movie_fast_on() ? totk_movie_free_count(m->held_mask) : 0;
+    if (!totk_movie_fast_on()) for (int i = 0; i < OUT_BUFS; i++) freeslots += !m->out_held[i];
     if (freeslots < need) return 0;
     if (p->size > 0) {
         uint64_t t0 = now_ns();
@@ -266,11 +298,13 @@ static void release_codec(Movie *m) {
     for (int i = 0; i < IN_BUFS; i++) { free(m->in[i]); m->in[i] = NULL; }
     for (int i = 0; i < OUT_BUFS; i++) { free(m->out[i]); m->out[i] = NULL; }
     if (m->started) atomic_fetch_sub_explicit(&g_started_movies, 1, memory_order_relaxed);
-    m->configured = m->started = 0; m->nin_free = m->npending = m->nready = m->ndecoded = 0; m->t0 = 0;
+    m->held_mask = m->queued_mask = 0u; m->configured = m->started = 0;
+    m->nin_free = m->npending = m->nready = m->ndecoded = 0; m->t0 = 0;
 }
 static void reset_queues(Movie *m) {
     m->nin_free = 0; for (int i = 0; i < IN_BUFS; i++) m->in_free[m->nin_free++] = i;
-    memset(m->out_held, 0, sizeof m->out_held); m->npending = m->nready = m->ndecoded = 0; m->eos_in = 0; m->t0 = 0;
+    memset(m->out_held, 0, sizeof m->out_held); m->held_mask = m->queued_mask = 0u;
+    m->npending = m->nready = m->ndecoded = 0; m->eos_in = 0; m->t0 = 0;
 }
 
 /* ---- entries ---- */
@@ -287,13 +321,15 @@ static void h_ctor(void *obj, int type, int format, int mode, int priority) {
     while (i < MAX_MOVIES && g_movies[i] && g_movies[i]->guest != obj) i++;
     if (i == MAX_MOVIES) runtime_fail("movie decoder table full");
     if (g_movies[i]) { LOG("【红】decoder object %p reused without destruction", obj); release_codec(g_movies[i]); free(g_movies[i]); }
-    g_movies[i] = m; pthread_mutex_unlock(&g_lock);
+    g_movies[i] = m; totk_movie_slot_set(&g_movie_fast_tbl, i, obj, m); pthread_mutex_unlock(&g_lock);
     ((void **)obj)[0] = G.vptr; ((void **)obj)[1] = m;
     LOG("VP9 decoder %p on the host (libvpx %s), output format %d", obj, vpx_codec_version_str(), format);
 }
 static void destroy(void *obj) {
     pthread_mutex_lock(&g_lock); Movie *m = NULL;
-    for (int i = 0; i < MAX_MOVIES; i++) if (g_movies[i] && g_movies[i]->guest == obj) { m = g_movies[i]; g_movies[i] = NULL; }
+    for (int i = 0; i < MAX_MOVIES; i++) if (g_movies[i] && g_movies[i]->guest == obj) {
+        m = g_movies[i]; g_movies[i] = NULL; totk_movie_slot_clear(&g_movie_fast_tbl, i);
+    }
     if (m) { pthread_mutex_lock(&m->mu); pthread_mutex_unlock(&m->mu); }   /* wait for an operation in progress (movie_host_tick) */
     pthread_mutex_unlock(&g_lock);
     if (!m) return;
@@ -320,6 +356,7 @@ static int h_configure(void *obj, void *format) {
     release_codec(m); m->w = w; m->h = h;
     vpx_codec_dec_cfg_t cfg = {.threads = 4, .w = (unsigned)w, .h = (unsigned)h};
     if (vpx_codec_dec_init(&m->vpx, vpx_codec_vp9_dx(), &cfg, 0) != VPX_CODEC_OK) runtime_fail("libvpx VP9 decoder initialisation");
+    configure_vp9_mt(&m->vpx);
     m->vpx_live = 1;
     for (int i = 0; i < IN_BUFS; i++) if (!(m->in[i] = malloc(IN_CAP))) runtime_fail("movie input buffers");
     for (int i = 0; i < OUT_BUFS; i++) if (!(m->out[i] = malloc((size_t)frame_bytes(m)))) runtime_fail("movie output buffers");
@@ -379,6 +416,7 @@ static int h_flush(void *obj) {
         vpx_codec_destroy(&m->vpx); m->vpx_live = 0;
         vpx_codec_dec_cfg_t cfg = {.threads = 4, .w = (unsigned)m->w, .h = (unsigned)m->h};
         if (vpx_codec_dec_init(&m->vpx, vpx_codec_vp9_dx(), &cfg, 0) != VPX_CODEC_OK) runtime_fail("libvpx VP9 decoder re-initialisation");
+        configure_vp9_mt(&m->vpx);
         m->vpx_live = 1; reset_queues(m);
     }
     pthread_mutex_unlock(&m->mu);
@@ -425,13 +463,13 @@ static int h_acquire_output(void *obj, int *index, int64_t *time, unsigned *flag
     *index = -1; *time = 0; *flags = 0; *remaining = 0; int st = ST_NO_OUTPUT;
     if (m->nready > 0) {
         Ready r = m->ready[0]; memmove(m->ready, m->ready + 1, (size_t)--m->nready * sizeof m->ready[0]);
+        if (r.index >= 0 && r.index < OUT_BUFS) m->queued_mask &= ~(1u << r.index);
         *index = r.index; *time = r.time; *flags = r.flags; *remaining = m->nready; st = ST_OK;
     }
     pthread_mutex_unlock(&m->mu);
     return st;
 }
-static int h_get_output(void *obj, int index, void *buf) {
-    Movie *m = find(obj); if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT])(obj, index, buf);
+static int get_output_for_movie(Movie *m, int index, void *buf) {
     if (!buf) return ST_NULL;
     G.buf_set_range(buf, 0, 0);
     pthread_mutex_lock(&m->mu);
@@ -443,6 +481,10 @@ static int h_get_output(void *obj, int index, void *buf) {
         else LOG("【红】output buffer of %zu bytes for a %d-byte frame", G.buf_capacity(buf), bytes);
     }
     pthread_mutex_unlock(&m->mu); return st;
+}
+static int h_get_output(void *obj, int index, void *buf) {
+    Movie *m = find(obj); if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT])(obj, index, buf);
+    return get_output_for_movie(m, index, buf);
 }
 static int h_get_output_size(void *obj, int *size, int *count) {
     Movie *m = find(obj); if (!m) return ((pp_fn)G.orig[MOVIE_GET_OUTPUT_SIZE])(obj, size, count);
@@ -457,9 +499,13 @@ static int h_release_output(void *obj, int index) {
     pthread_mutex_lock(&m->mu);
     int st = ST_ERROR;
     if (index >= 0 && index < OUT_BUFS && m->out_held[index]) {
-        int queued = 0; for (int i = 0; i < m->nready; i++) queued |= m->ready[i].index == index;
-        for (int i = 0; i < m->ndecoded; i++) queued |= m->decoded[i].index == index;
-        if (!queued) { m->out_held[index] = 0; drain_pending(m, &s); st = ST_OK; }
+        int queued = 0;
+        if (totk_movie_fast_on()) { queued = (int)((m->queued_mask >> index) & 1u); }
+        else {
+            for (int i = 0; i < m->nready; i++) queued |= m->ready[i].index == index;
+            for (int i = 0; i < m->ndecoded; i++) queued |= m->decoded[i].index == index;
+        }
+        if (!queued) { m->out_held[index] = 0; m->held_mask &= ~(1u << index); drain_pending(m, &s); st = ST_OK; }
     }
     pthread_mutex_unlock(&m->mu); fire(&s);
     return st;
@@ -469,17 +515,20 @@ static int h_get_last_error(void *obj) {
     return m->last_error;
 }
 typedef int (*ibm_fn)(void *, int, void *, void *);
-static int h_get_output_buffer_format(void *obj, int index, void *md) {
-    Movie *m = find(obj); if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT_BUFFER_FORMAT])(obj, index, md);
+static int get_output_fmt_for_movie(Movie *m, int index, void *md) {
     if (!md) return ST_NULL;
     if (index < 0 || index >= OUT_BUFS || !m->out_held[index]) return ST_ERROR;
     set_format(m, md); return ST_OK;
 }
+static int h_get_output_buffer_format(void *obj, int index, void *md) {
+    Movie *m = find(obj); if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT_BUFFER_FORMAT])(obj, index, md);
+    return get_output_fmt_for_movie(m, index, md);
+}
 static int h_get_output_md(void *obj, int index, void *buf, void *md) {
     Movie *m = find(obj); if (!m) return ((ibm_fn)G.orig[MOVIE_GET_OUTPUT_MD])(obj, index, buf, md);
     if (!buf && !md) return ST_NULL;
-    int st = md ? h_get_output_buffer_format(obj, index, md) : ST_OK;
-    return st == ST_OK && buf ? h_get_output(obj, index, buf) : st;
+    int st = md ? get_output_fmt_for_movie(m, index, md) : ST_OK;
+    return st == ST_OK && buf ? get_output_for_movie(m, index, buf) : st;
 }
 
 static void *const ENTRIES[MOVIE_ENTRIES] = {

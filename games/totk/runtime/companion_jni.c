@@ -53,6 +53,25 @@ void runtime_android_game_input_focus(JNIEnv *env, jclass cls, jboolean top);
 void runtime_android_motion(JNIEnv *env, jclass cls, jfloat ax, jfloat ay, jfloat az, jfloat gx, jfloat gy, jfloat gz);
 void runtime_android_motion_live(JNIEnv *env, jclass cls, jboolean on, jstring source);
 jint runtime_android_feedback_enabled(JNIEnv *env, jclass cls);
+#if defined(__GNUC__)
+extern int vk_overlay_set_mode(int mode) __attribute__((weak));
+extern int vk_minimap_read(uint8_t *rgba_out, int max_bytes, int32_t meta[5]) __attribute__((weak));
+extern int vk_minimap_cycle(void) __attribute__((weak));
+extern void vk_minimap_enable(int on) __attribute__((weak));
+extern void vk_minimap_stream_mode(int stream, int mode) __attribute__((weak));
+extern int vk_minimap_objective_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4]) __attribute__((weak));
+extern int vk_minimap_lhud_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4]) __attribute__((weak));
+extern int vk_minimap_ui_tex_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4], int request) __attribute__((weak));
+#else
+extern int vk_overlay_set_mode(int mode);
+extern int vk_minimap_read(uint8_t *rgba_out, int max_bytes, int32_t meta[5]);
+extern int vk_minimap_cycle(void);
+extern void vk_minimap_enable(int on);
+extern void vk_minimap_stream_mode(int stream, int mode);
+extern int vk_minimap_objective_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4]);
+extern int vk_minimap_lhud_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4]);
+extern int vk_minimap_ui_tex_read(uint8_t *rgba_out, int max_bytes, int32_t meta[4], int request);
+#endif
 
 /* Do not cache this in JNI_OnLoad: NativeActivity's start_game reads totk.env
    synchronously during super.onCreate, before Java constructs its controller. */
@@ -215,17 +234,33 @@ static jstring JNICALL native_snapshot(JNIEnv *env, jclass cls, jint detail) {
 }
 
 /* The common state. The page is the Java screen's unless the game side filled one in. */
+
+__attribute__((weak)) int hwaoc_companion_state(CompanionState *out, int64_t *age_ms);
+__attribute__((weak)) void hwaoc_companion_page(int page);
+__attribute__((weak)) int hwaoc_companion_detail(int32_t *ints, int max_ints, float *flts, int max_flts, char *txt, int max_txt);
+__attribute__((weak)) int hwaoc_companion_fire(int action_id);
+__attribute__((weak)) void hwaoc_companion_abort(void);
+__attribute__((weak)) int hwaoc_companion_pin(int op, int slot, const char *label);
 static _Atomic int shown_page = -1;
 static void JNICALL native_page(JNIEnv *env, jclass cls, jint page) {
     (void)env; (void)cls;
     atomic_store(&shown_page, page);
+    if (hwaoc_companion_page) hwaoc_companion_page(page);
 }
 static jboolean JNICALL native_state(JNIEnv *env, jclass cls, jlongArray out) {
     if (!out || (*env)->GetArrayLength(env, out) < COMPANION_STATE_FIELDS || !native_enabled(env, cls)) return JNI_FALSE;
     CompanionState s; int64_t age = 0, words[COMPANION_STATE_FIELDS];
+    if (hwaoc_companion_state && hwaoc_companion_state(&s, &age)) {
+        if (s.page < 0) s.page = atomic_load(&shown_page);
+        companion_state_words(&s, age, words);
+        jlong copy[COMPANION_STATE_FIELDS];
+        for (int i = 0; i < COMPANION_STATE_FIELDS; i++) copy[i] = words[i];
+        (*env)->SetLongArrayRegion(env, out, 0, COMPANION_STATE_FIELDS, copy);
+        return JNI_TRUE;
+    }
     int hosted = runtime_duo_state(&s, &age);
-#ifdef GAME_BOTW
-    if (!hosted) return JNI_FALSE;   /* Breath of the Wild's state is the host's alone (the runtime has no reader for that game) */
+#if defined(GAME_BOTW) || defined(GAME_HWAOC)
+    if (!hosted) return JNI_FALSE;   /* runtime has no companion reader for this game */
 #else
     if (!hosted || age > DUO_STATE_MAX_AGE_MS) {   /* none yet, or the host stopped: the MIT reader, read now */
         companion_state((uintptr_t)runtime_module_base("main"), guest_read, &s);
@@ -275,6 +310,90 @@ static jboolean JNICALL native_action(JNIEnv *env, jclass cls, jint kind, jint a
     return JNI_TRUE;
 }
 
+
+static jstring JNICALL native_warriors_detail(JNIEnv *env, jclass cls, jintArray ints, jfloatArray flts) {
+    if (!native_enabled(env, cls) || !ints || !flts || !hwaoc_companion_detail) return NULL;
+    if ((*env)->GetArrayLength(env, ints) < 32 || (*env)->GetArrayLength(env, flts) < 416) return NULL;
+    jint ibuf[32] = {0}; jfloat fbuf[416] = {0}; char txt[512] = "";
+    if (!hwaoc_companion_detail((int32_t *)ibuf, 32, (float *)fbuf, 416, txt, sizeof txt)) return NULL;
+    (*env)->SetIntArrayRegion(env, ints, 0, 32, ibuf);
+    (*env)->SetFloatArrayRegion(env, flts, 0, 416, fbuf);
+    return (*env)->NewStringUTF(env, txt);
+}
+static jboolean JNICALL native_warriors_fire(JNIEnv *env, jclass cls, jint id) {
+    return (native_enabled(env, cls) && hwaoc_companion_fire && hwaoc_companion_fire((int)id)) ? JNI_TRUE : JNI_FALSE;
+}
+static void JNICALL native_warriors_abort(JNIEnv *env, jclass cls) {
+    (void)env; (void)cls; if (hwaoc_companion_abort) hwaoc_companion_abort();
+}
+static jint JNICALL native_warriors_pin(JNIEnv *env, jclass cls, jint op, jint slot, jstring label) {
+    if (!native_enabled(env, cls) || !hwaoc_companion_pin) return -1;
+    const char *s = label ? (*env)->GetStringUTFChars(env, label, NULL) : NULL;
+    int r = hwaoc_companion_pin((int)op, (int)slot, s);
+    if (s) (*env)->ReleaseStringUTFChars(env, label, s);
+    return (jint)r;
+}
+static jint JNICALL native_overlay_set_mode(JNIEnv *env, jclass cls, jint mode) {
+    (void)env; (void)cls;
+    return vk_overlay_set_mode ? (jint)vk_overlay_set_mode((int)mode) : 0;
+}
+static jint JNICALL native_warriors_minimap(JNIEnv *env, jclass cls, jbyteArray rgbaOut, jintArray metaOut) {
+    if (!native_enabled(env, cls) || !rgbaOut || !metaOut || !vk_minimap_read) return 0;
+    if ((*env)->GetArrayLength(env, metaOut) < 5) return 0;
+    jint jm[5] = {0};
+    (*env)->GetIntArrayRegion(env, metaOut, 0, 5, jm);
+    int32_t m[5] = {(int32_t)jm[0], (int32_t)jm[1], (int32_t)jm[2], (int32_t)jm[3], (int32_t)jm[4]};
+    jsize cap = (*env)->GetArrayLength(env, rgbaOut);
+    jbyte *buf = cap > 0 ? (*env)->GetByteArrayElements(env, rgbaOut, NULL) : NULL;
+    int updated = buf ? vk_minimap_read((uint8_t *)buf, (int)cap, m) : 0;
+    if (buf) (*env)->ReleaseByteArrayElements(env, rgbaOut, buf, updated ? 0 : JNI_ABORT);
+    for (int i = 0; i < 5; i++) jm[i] = (jint)m[i];
+    (*env)->SetIntArrayRegion(env, metaOut, 0, 5, jm);
+    return updated ? 1 : 0;
+}
+static jint JNICALL native_warriors_minimap_cycle(JNIEnv *env, jclass cls) {
+    (void)env; (void)cls;
+    return vk_minimap_cycle ? (jint)vk_minimap_cycle() : 0;
+}
+static void JNICALL native_warriors_stream_mode(JNIEnv *env, jclass cls, jint stream, jint mode) {
+    (void)env; (void)cls;
+    if (vk_minimap_stream_mode) vk_minimap_stream_mode((int)stream, (int)mode);
+}
+static void JNICALL native_warriors_minimap_enable(JNIEnv *env, jclass cls, jboolean on) {
+    (void)env; (void)cls;
+    if (vk_minimap_enable) vk_minimap_enable(on ? 1 : 0);
+}
+
+static jint jni_read_rgba_buf(
+        JNIEnv *env, jclass cls, jbyteArray rgbaOut, jintArray metaOut, int nmeta,
+        int (*fn4)(uint8_t *, int, int32_t *),
+        int (*fn_req)(uint8_t *, int, int32_t *, int), int req) {
+    if (!native_enabled(env, cls) || !rgbaOut || !metaOut || (*env)->GetArrayLength(env, metaOut) < nmeta || nmeta > 8) return 0;
+    jint jm[8] = {0}; int32_t m[8] = {0};
+    (*env)->GetIntArrayRegion(env, metaOut, 0, nmeta, jm);
+    for (int i = 0; i < nmeta; i++) m[i] = (int32_t)jm[i];
+    jsize cap = (*env)->GetArrayLength(env, rgbaOut);
+    jbyte *buf = cap > 0 ? (*env)->GetByteArrayElements(env, rgbaOut, NULL) : NULL;
+    int updated = 0;
+    if (buf) updated = fn_req ? fn_req((uint8_t *)buf, (int)cap, m, req) : (fn4 ? fn4((uint8_t *)buf, (int)cap, m) : 0);
+    if (buf) (*env)->ReleaseByteArrayElements(env, rgbaOut, buf, updated ? 0 : JNI_ABORT);
+    for (int i = 0; i < nmeta; i++) jm[i] = (jint)m[i];
+    (*env)->SetIntArrayRegion(env, metaOut, 0, nmeta, jm);
+    return updated ? 1 : 0;
+}
+
+static jint JNICALL native_warriors_objective(JNIEnv *env, jclass cls, jbyteArray rgbaOut, jintArray metaOut) {
+    return vk_minimap_objective_read ? jni_read_rgba_buf(env, cls, rgbaOut, metaOut, 4, vk_minimap_objective_read, NULL, 0) : 0;
+}
+
+static jint JNICALL native_warriors_lhud(JNIEnv *env, jclass cls, jbyteArray rgbaOut, jintArray metaOut) {
+    return vk_minimap_lhud_read ? jni_read_rgba_buf(env, cls, rgbaOut, metaOut, 4, vk_minimap_lhud_read, NULL, 0) : 0;
+}
+
+static jint JNICALL native_warriors_ui_tex(JNIEnv *env, jclass cls, jbyteArray rgbaOut, jintArray metaOut, jboolean request) {
+    return vk_minimap_ui_tex_read ? jni_read_rgba_buf(env, cls, rgbaOut, metaOut, 4, NULL, vk_minimap_ui_tex_read, request ? 1 : 0) : 0;
+}
+
 __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
     JNIEnv *env;
@@ -294,6 +413,18 @@ __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM *vm, void *reserve
         {"result", "(I)Ljava/lang/String;", (void *)native_result},
         {"nativeState", "([J)Z", (void *)native_state},
         {"nativePage", "(I)V", (void *)native_page},
+        {"warriorsDetailNative", "([I[F)Ljava/lang/String;", (void *)native_warriors_detail},
+        {"warriorsFireNative", "(I)Z", (void *)native_warriors_fire},
+        {"warriorsAbortNative", "()V", (void *)native_warriors_abort},
+        {"warriorsPinNative", "(IILjava/lang/String;)I", (void *)native_warriors_pin},
+        {"overlaySetModeNative", "(I)I", (void *)native_overlay_set_mode},
+        {"warriorsMinimapNative", "([B[I)I", (void *)native_warriors_minimap},
+        {"warriorsMinimapCycleNative", "()I", (void *)native_warriors_minimap_cycle},
+        {"warriorsMinimapEnableNative", "(Z)V", (void *)native_warriors_minimap_enable},
+        {"warriorsStreamModeNative", "(II)V", (void *)native_warriors_stream_mode},
+        {"warriorsObjectiveNative", "([B[I)I", (void *)native_warriors_objective},
+        {"warriorsLeftHudNative", "([B[I)I", (void *)native_warriors_lhud},
+        {"warriorsUiTexNative", "([B[IZ)I", (void *)native_warriors_ui_tex},
     };
     if ((*env)->RegisterNatives(env, cls, methods, sizeof methods / sizeof *methods)) {
         (*env)->ExceptionClear(env); fprintf(stderr, "[companion] RegisterNatives failed\n");

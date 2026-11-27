@@ -58,6 +58,11 @@ What changed in each version: [CHANGELOG.md](../CHANGELOG.md). The full player g
   horse) open Android's keyboard.
 - **Saves**: export and import (also from JKSV, Checkpoint, Ryujinx or yuzu dumps), automatic backups, an optional
   save folder kept in sync (for example on the SD card or a cloud-synced folder).
+- **Runtime & Vulkan optimizations (`Opts 2–60`)**: env-switch-gated fast paths across Horizon SVC/HID/RomFS/audio,
+  pacing, overlay, and Vulkan descriptor/PSO/copy/compute paths, plus `UNIFORM_TEXEL_BUFFER` buffer-texture retyping,
+  one-slice 3D texture aliasing, and `NEAR_IS_ZERO` depth correction on seed shaders.
+- **AYN Controller style & Bifrost LED scaling**: reads `persist.sys.gamepad.type` on AYN handhelds to follow
+  Nintendo vs Xbox face-button mode automatically, and scales Bifrost stick ring intensity with screen brightness.
 - **Storage of your choice**: internal storage (fastest), the SD card, or a folder you choose; the game data can be
   moved later.
 - **Dual-screen companion** on the AYN Thor and Retroid Pocket Duo: status, map and inventory on the second screen,

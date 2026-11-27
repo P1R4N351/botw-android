@@ -268,7 +268,7 @@ VKTEST_FLAGS := -O1 -g $(WARN) -Wno-unused-parameter -D_GNU_SOURCE -DGPU_VK -DTO
   -I$(TOTK)/third_party/d2r_gfx/gfx/nvn/include $(COMPAT) -fPIE -pie
 VKTEST_LIBS := -ldl -lm $(if $(filter linux,$(TARGET)),-lpthread)
 VKTEST_FRONTEND := $(OUT)/test_vktexcopy_frontend.o
-$(VKTEST_FRONTEND): $(TOTK)/android/gfx/test_vktexcopy_frontend.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/hle_nvn.c
+$(VKTEST_FRONTEND): $(TOTK)/android/gfx/test_vktexcopy_frontend.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/hle_nvn.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_nvn_hle_fast.h $(TOTK)/android/gfx/vk_reg_wb_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -fno-omit-frame-pointer -ffunction-sections -fdata-sections -MMD -MP -MF $(@:.o=.d) -c -o $@ $<
 -include $(VKTEST_FRONTEND:.o=.d)
@@ -280,11 +280,12 @@ $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vk
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_framegen_lsfg.h $(TOTK)/android/gfx/framegen_budget_lsfg.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/framegen_drs.h $(TOTK)/runtime/drs_framegen.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_pcache.h $(TOTK)/android/gfx/vk_pcache_store.h $(TOTK)/android/gfx/vk_pcache_identity.h
-$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest vkrectest vkcanvastest): $(TOTK)/android/gfx/pso_trace_key.h
+$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest vkrectest vkcanvastest): $(TOTK)/android/gfx/pso_trace_key.h $(TOTK)/android/gfx/vk_rec_fast.h $(TOTK)/android/gfx/vk_post_fast.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_screen_classify.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_alpha_test.h
-$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vknativeuitest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_pso_keys.h $(TOTK)/android/gfx/vk_pso_runtime.inc
-$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest vkrectest vkcanvastest): $(TOTK)/android/gfx/pso_trace_key.h
+$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_edge_guard.h $(TOTK)/android/gfx/vk_quad_batch.h $(TOTK)/android/gfx/vk_ktgl_memo.h $(TOTK)/android/gfx/vk_shader_fast.h $(TOTK)/android/gfx/vk_dsc_fast.h $(TOTK)/android/gfx/vk_vb_fast.h $(TOTK)/android/gfx/vk_stage_fast.h $(TOTK)/android/gfx/vk_state_fast.h $(TOTK)/android/gfx/vk_cs_fast.h $(TOTK)/android/gfx/vk_prog_fast.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_nvn_sub_fast.h $(TOTK)/android/gfx/vk_tbuf_fast.h $(TOTK)/android/gfx/vk_gw_fast.h $(TOTK)/android/gfx/vk_ub_fast.h $(TOTK)/android/gfx/vk_view_fast.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_nvn_hle_fast.h $(TOTK)/android/gfx/vk_img_fast.h $(TOTK)/android/gfx/vk_fg_fast.h $(TOTK)/android/gfx/vk_spv_fast.h $(TOTK)/android/gfx/vk_ovl_fast.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_tex_layout_fast.h $(TOTK)/android/gfx/vk_compute_fast.h $(TOTK)/android/gfx/vk_bind_fast.h
+$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vknativeuitest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_pso_keys.h $(TOTK)/android/gfx/vk_pcache_fast.h $(TOTK)/android/gfx/vk_pso_runtime.inc
+$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest vkrectest vkcanvastest): $(TOTK)/android/gfx/pso_trace_key.h $(TOTK)/android/gfx/vk_rec_fast.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest): $(TOTK)/android/gfx/vk_screen_classify.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest): $(TOTK)/runtime/frame_lag.h $(TOTK)/runtime/guest_clock.h $(TOTK)/android/gfx/vk_present_policy.h $(TOTK)/android/gfx/vk_timestamp.h $(TOTK)/android/gfx/vk_gpu_time.h
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest): $(TOTK)/android/gfx/vk_present_job.h
@@ -293,6 +294,11 @@ vktest: $(OUT)/vktest $(OUT)/vkdrawtest $(OUT)/vkrectest $(OUT)/vkrecspantest $(
 vktest: $(OUT)/vkcanvastest
 vktest: $(OUT)/vkseedpacktest $(OUT)/vkseediotest
 vktest: $(OUT)/vkcomputestoretest
+vktest: $(OUT)/ktglopttest
+ktglopttest: $(OUT)/ktglopttest
+$(OUT)/ktglopttest: $(TOTK)/android/gfx/test_vk_ktgl_opt.c $(TOTK)/android/gfx/host_test_support.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_dirty.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_fmt_mtl.c $(TOTK)/android/gfx/vk_fmt.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_tex_layout_fast.h $(TOTK)/android/gfx/vk_edge_guard.h $(TOTK)/android/gfx/vk_quad_batch.h $(TOTK)/android/gfx/vk_ktgl_memo.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w2.h $(TOTK)/runtime/movie_nv12.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w3.h $(TOTK)/runtime/romfs_handles.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w5.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w6.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w7.h $(TOTK)/android/gfx/vk_res_fast.h $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w8.h $(TOTK)/android/gfx/vk_shader_fast.h $(TOTK)/android/gfx/vk_dsc_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w9.h $(TOTK)/android/gfx/vk_vb_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w10.h $(TOTK)/android/gfx/vk_stage_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w11.h $(TOTK)/android/gfx/vk_state_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w12.h $(TOTK)/android/gfx/vk_cs_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w13.h $(TOTK)/android/gfx/vk_prog_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w14.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_nvn_sub_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w15.h $(TOTK)/android/gfx/vk_tbuf_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w16.h $(TOTK)/android/gfx/vk_gw_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w17.h $(TOTK)/android/gfx/vk_ub_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w18.h $(TOTK)/android/gfx/vk_view_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w19.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_nvn_hle_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w20.h $(TOTK)/android/gfx/vk_reg_wb_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w21.h $(TOTK)/android/gfx/vk_serial_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w22.h $(TOTK)/android/gfx/vk_img_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w23.h $(TOTK)/runtime/totk_hid_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w24.h $(TOTK)/runtime/totk_svc_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w25.h $(TOTK)/runtime/totk_time_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w26.h $(TOTK)/runtime/totk_gate_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w27.h $(TOTK)/runtime/totk_fs_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w28.h $(TOTK)/runtime/totk_oe_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w29.h $(TOTK)/runtime/totk_audren_fast.h $(TOTK)/android/gfx/vk_upload_pool.c $(TOTK)/android/gfx/vk_upload_pool.h $(TOTK)/android/gfx/vk_upload_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w30.h $(TOTK)/runtime/totk_movie_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w31.h $(TOTK)/android/gfx/vk_imgmem_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w32.h $(TOTK)/android/gfx/vk_seed_pack.h $(TOTK)/android/gfx/vk_seed_fast.h $(TOTK)/android/gfx/vk_pso_keys.h $(TOTK)/android/gfx/vk_pcache_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w33.h $(TOTK)/android/gfx/vk_rec_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w34.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w35.h $(TOTK)/android/gfx/vk_post_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w36.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w37.h $(TOTK)/runtime/totk_perf_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w38.h $(TOTK)/android/gfx/vk_fg_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w39.h $(TOTK)/android/gfx/vk_spv_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w40.h $(TOTK)/android/gfx/vk_ovl_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w41.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/predict_pace.h $(TOTK)/android/gfx/display_clock.h $(TOTK)/android/gfx/fps_auto.h $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w42.h $(TOTK)/android/gfx/vk_subcap_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w43.h $(TOTK)/android/gfx/vk_gpuprof_fast.h $(TOTK)/android/gfx/vk_gpuprof_pipe.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w44.h $(TOTK)/android/gfx/vk_compute_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w45.h $(TOTK)/android/gfx/vk_bind_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w46.h $(TOTK)/android/gfx/vk_canvas_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w47.h $(TOTK)/android/gfx/vk_pso_key_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w48.h $(TOTK)/android/gfx/vk_res_samp_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w49.h $(TOTK)/android/gfx/vk_sig_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w50.h $(TOTK)/android/gfx/vk_view_vfix_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w51.h $(TOTK)/android/gfx/vk_bind_wb_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w52.h $(TOTK)/android/gfx/vk_fg_wb_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w53.h $(TOTK)/android/gfx/vk_touch_alias_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w54.h $(TOTK)/android/gfx/vk_ub_gw_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w55.h $(TOTK)/android/gfx/vk_load_wb_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w56.h $(TOTK)/android/gfx/vk_ans_widen_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w57.h $(TOTK)/android/gfx/vk_copy_span_fast.h $(TOTK)/android/gfx/test_vk_ktgl_opt_w58.h
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -g $(WARN) -Wno-unused-parameter -D_GNU_SOURCE -DW6_TEST_HOOKS -DW7_TEST_HOOKS -DTOTK_W30_TEST_HOOKS -DTOTK_W31_TEST_HOOKS -DTOTK_W32_TEST_HOOKS -DTOTK_W33_TEST_HOOKS -DTOTK_W34_TEST_HOOKS -DTOTK_W35_TEST_HOOKS -DTOTK_W36_TEST_HOOKS -DTOTK_W41_TEST_HOOKS -DTOTK_W42_TEST_HOOKS -DTOTK_W43_TEST_HOOKS -DTOTK_W44_TEST_HOOKS -DTOTK_W45_TEST_HOOKS -DTOTK_W46_TEST_HOOKS -DTOTK_W47_TEST_HOOKS -DTOTK_W48_TEST_HOOKS -DTOTK_W49_TEST_HOOKS -DTOTK_W50_TEST_HOOKS -DTOTK_W51_TEST_HOOKS -DTOTK_W52_TEST_HOOKS -DTOTK_W53_TEST_HOOKS -DTOTK_W54_TEST_HOOKS -DTOTK_W55_TEST_HOOKS -DTOTK_W56_TEST_HOOKS -DTOTK_W57_TEST_HOOKS -DTOTK_W58_TEST_HOOKS -I$(TOTK)/runtime -I$(TOTK)/third_party/d2r_gfx/gfx/nvn -I$(TOTK)/third_party/d2r_gfx/gfx/nvn/include -I$(TOTK)/third_party/d2r_gfx/gfx/tex $(COMPAT) -o $@ $(filter %.c,$^) -lpthread
 vktest: $(OUT)/vksubgrouptest
 vksubgrouptest: $(OUT)/vksubgrouptest
 $(OUT)/vksubgrouptest: $(TOTK)/android/gfx/test_vk_subgroup.c $(TOTK)/android/gfx/vk_subgroup.h
@@ -302,7 +308,7 @@ $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vk
 vktest: $(OUT)/vkpositiontest
 .PHONY: vkpositiontest
 vkpositiontest: $(OUT)/vkpositiontest
-$(OUT)/vkpositiontest: $(TOTK)/android/gfx/test_vk_position.c $(TOTK)/android/gfx/vk_position.h $(TOTK)/android/gfx/vk_varyings.h $(TOTK)/android/gfx/vk_seed_pack.h
+$(OUT)/vkpositiontest: $(TOTK)/android/gfx/test_vk_position.c $(TOTK)/android/gfx/vk_position.h $(TOTK)/android/gfx/vk_varyings.h $(TOTK)/android/gfx/vk_seed_pack.h $(TOTK)/android/gfx/vk_seed_fast.h $(TOTK)/android/gfx/vk_spv_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -D_GNU_SOURCE -O1 -g $(WARN) -o $@ $<
 $(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest vkpcachetest poolfintest vkreplaypintest vkrectest vkcanvastest): $(TOTK)/android/gfx/vk_position.h
@@ -332,7 +338,7 @@ $(OUT)/vkpcachetest: $(TOTK)/android/gfx/test_vkpcache.c $(VKTEST_SRC) $(TOTK)/a
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -o $@ $(filter %.c,$^) $(VKTEST_LIBS)
 texelregiontest: $(OUT)/texelregiontest
-$(OUT)/texelregiontest: $(TOTK)/android/gfx/test_texel_region.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.h
+$(OUT)/texelregiontest: $(TOTK)/android/gfx/test_texel_region.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_tex_layout_fast.h $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -g $(WARN) -o $@ $(filter %.c,$^)
 # Parallel upload deswizzle: byte identity against the serial decoder with 0/1/3 helpers (no Vulkan). Under
@@ -340,17 +346,17 @@ $(OUT)/texelregiontest: $(TOTK)/android/gfx/test_texel_region.c $(TOTK)/third_pa
 vktest: $(OUT)/uploadpooltest
 uploadpooltest: $(OUT)/uploadpooltest
 $(OUT)/uploadpooltest: $(TOTK)/android/gfx/test_upload_pool.c $(TOTK)/android/gfx/vk_upload_pool.c $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.c $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.c \
-  $(TOTK)/android/gfx/vk_upload_pool.h $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.h
+  $(TOTK)/android/gfx/vk_upload_pool.h $(TOTK)/android/gfx/vk_upload_fast.h $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/nvn_tex.h $(TOTK)/third_party/d2r_gfx/gfx/nvn/totk_tex_layout_fast.h $(TOTK)/third_party/d2r_gfx/gfx/tex/nvn_deswizzle_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -g $(WARN) -D_GNU_SOURCE -o $@ $(filter %.c,$^) $(if $(filter linux,$(TARGET)),-lpthread)
-$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest): $(TOTK)/android/gfx/vk_seed_io.h $(TOTK)/android/gfx/vk_seed_pack.h
-$(OUT)/vkseedpacktest: $(TOTK)/android/gfx/test_vk_seed_pack.c $(TOTK)/android/gfx/vk_seed_pack.h
+$(addprefix $(OUT)/,vktest vkdrawtest vkrecspantest vkpipetest vkdrawtest-app vkoverlaytest vkposttest vkframegentest vknativeuitest vkxlatetest): $(TOTK)/android/gfx/vk_seed_io.h $(TOTK)/android/gfx/vk_seed_pack.h $(TOTK)/android/gfx/vk_seed_fast.h $(TOTK)/android/gfx/vk_compute_fast.h $(TOTK)/android/gfx/vk_canvas_fast.h
+$(OUT)/vkseedpacktest: $(TOTK)/android/gfx/test_vk_seed_pack.c $(TOTK)/android/gfx/vk_seed_pack.h $(TOTK)/android/gfx/vk_seed_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -g $(WARN) -o $@ $(filter %.c,$^)
-$(OUT)/vkseediotest: $(TOTK)/android/gfx/test_vk_seed_io.c $(TOTK)/android/gfx/vk_seed_io.c $(TOTK)/android/gfx/vk_shader_xlate.c $(TOTK)/android/gfx/host_test_support.c $(TOTK)/android/gfx/vk_seed_io.h $(TOTK)/android/gfx/vk_seed_pack.h
+$(OUT)/vkseediotest: $(TOTK)/android/gfx/test_vk_seed_io.c $(TOTK)/android/gfx/vk_seed_io.c $(TOTK)/android/gfx/vk_shader_xlate.c $(TOTK)/android/gfx/host_test_support.c $(TOTK)/android/gfx/vk_seed_io.h $(TOTK)/android/gfx/vk_seed_pack.h $(TOTK)/android/gfx/vk_seed_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ $(filter %.c,$^) $(VKTEST_LIBS)
-$(OUT)/vkcanvastest: $(TOTK)/android/gfx/test_vkcanvas.c $(TOTK)/android/gfx/vk_canvas.c $(TOTK)/android/gfx/vk_canvas.h
+$(OUT)/vkcanvastest: $(TOTK)/android/gfx/test_vkcanvas.c $(TOTK)/android/gfx/vk_canvas.c $(TOTK)/android/gfx/vk_canvas.h $(TOTK)/android/gfx/vk_canvas_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -O1 -g $(WARN) -o $@ $(filter %.c,$^)
 vktest-native-ui: $(OUT)/vknativeuitest $(OUT)/vkdraw-seed/.done
@@ -364,7 +370,7 @@ $(OUT)/vktest: $(TOTK)/android/gfx/test_vk.c $(VKTEST_SRC)
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -o $@ $(filter %.c,$^) $(VKTEST_LIBS)
 	@echo "built $@"
-$(OUT)/vkdrawtest $(OUT)/vktest $(OUT)/vkrecspantest $(OUT)/vkpipetest: $(TOTK)/android/gfx/vk_load_proof.h
+$(OUT)/vkdrawtest $(OUT)/vktest $(OUT)/vkrecspantest $(OUT)/vkpipetest: $(TOTK)/android/gfx/vk_load_proof.h $(TOTK)/android/gfx/vk_spv_fast.h
 $(OUT)/vkdrawtest: $(TOTK)/android/gfx/test_vkdraw.c $(VKTEST_SRC) $(VKTEST_FRONTEND)
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -Wl,--gc-sections -o $@ $(filter %.c %.o,$^) $(VKTEST_LIBS)
@@ -375,8 +381,8 @@ vkgpuproftest: $(OUT)/vkgpuproftest $(OUT)/vkdraw-seed/.done
 # Same production worker fixture, without shader seeds or a Vulkan instance.
 vkgpuprofcompacttest: $(OUT)/vkgpuproftest
 vktest: $(OUT)/vkgpuproftest
-$(OUT)/vkgpuproftest: $(TOTK)/android/gfx/test_vk_gpuprof.c $(VKTEST_SRC) $(TOTK)/android/gfx/vk_int.h $(TOTK)/android/gfx/vk_record.h $(TOTK)/android/gfx/vk_load_proof.h
-$(OUT)/vkgpuproftest: $(TOTK)/android/gfx/vk_gpuprof_time.h $(TOTK)/android/gfx/vk_gpuprof_pipe.h
+$(OUT)/vkgpuproftest: $(TOTK)/android/gfx/test_vk_gpuprof.c $(VKTEST_SRC) $(TOTK)/android/gfx/vk_int.h $(TOTK)/android/gfx/vk_record.h $(TOTK)/android/gfx/vk_load_proof.h $(TOTK)/android/gfx/vk_spv_fast.h
+$(OUT)/vkgpuproftest: $(TOTK)/android/gfx/vk_gpuprof_time.h $(TOTK)/android/gfx/vk_gpuprof_pipe.h $(TOTK)/android/gfx/vk_gpuprof_fast.h
 $(OUT)/vkgpuproftest: $(TOTK)/android/gfx/vk_gpuprof_compact.h $(TOTK)/android/gfx/vk_gpuprof_fixture.h
 $(OUT)/vkgpuproftest: $(TOTK)/android/gfx/vk_gpuprof_sink.h
 	@mkdir -p $(dir $@)
@@ -420,7 +426,7 @@ $(OUT)/screenclassifytest: $(TOTK)/android/gfx/test_vkpipeline.c $(TOTK)/android
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -Werror -DTOTK_SCREEN_CLASSIFY_ONLY -o $@ $<
 FRAME_TEST_SRC := $(TOTK)/runtime/frame_timeline.c $(TOTK)/runtime/frame_fence.c
-FRAME_TEST_HEADERS := $(TOTK)/runtime/frame_timeline.h $(TOTK)/runtime/frame_fence.h
+FRAME_TEST_HEADERS := $(TOTK)/runtime/frame_timeline.h $(TOTK)/runtime/frame_fence.h $(TOTK)/runtime/totk_perf_fast.h
 frametimelinetest: $(OUT)/frametimelinetest
 $(OUT)/frametimelinetest: $(TOTK)/android/gfx/test_frame_timeline.c $(FRAME_TEST_SRC) $(FRAME_TEST_HEADERS)
 	@mkdir -p $(dir $@)
@@ -442,7 +448,7 @@ $(OUT)/displaypacetest: $(TOTK)/android/gfx/test_display_pace.c $(TOTK)/android/
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 displayclocktest: $(OUT)/displayclocktest
-$(OUT)/displayclocktest: $(TOTK)/android/gfx/test_display_clock.c $(TOTK)/android/gfx/display_clock.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/android/gfx/acquire_clock.h $(TOTK)/android/gfx/predict_pace.h $(TOTK)/runtime/present_clock.h
+$(OUT)/displayclocktest: $(TOTK)/android/gfx/test_display_clock.c $(TOTK)/android/gfx/display_clock.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/android/gfx/acquire_clock.h $(TOTK)/android/gfx/predict_pace.h $(TOTK)/runtime/present_clock.h
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 acquireslacktest: $(OUT)/acquireslacktest
@@ -450,7 +456,7 @@ $(OUT)/acquireslacktest: $(TOTK)/android/gfx/test_acquire_slack.c $(TOTK)/third_
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 predictpacetest: $(OUT)/predictpacetest
-$(OUT)/predictpacetest: $(TOTK)/android/gfx/test_predict_pace.c $(TOTK)/android/gfx/predict_pace.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/runtime/present_predict.h
+$(OUT)/predictpacetest: $(TOTK)/android/gfx/test_predict_pace.c $(TOTK)/android/gfx/predict_pace.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/runtime/present_predict.h
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 predictbudgettest: $(OUT)/predictbudgettest
@@ -462,7 +468,7 @@ $(OUT)/adrenogmemtest: $(TOTK)/android/gfx/test_adreno_gmem.c $(TOTK)/runtime/ad
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 fpsautotest: $(OUT)/fpsautotest
-$(OUT)/fpsautotest: $(TOTK)/android/gfx/test_fps_auto.c $(TOTK)/android/gfx/fps_auto.h $(TOTK)/android/gfx/acquire_clock.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/runtime/present_clock.h $(TOTK)/runtime/fps_auto_runtime.h
+$(OUT)/fpsautotest: $(TOTK)/android/gfx/test_fps_auto.c $(TOTK)/android/gfx/fps_auto.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/acquire_clock.h $(TOTK)/android/gfx/vk_present_slots.h $(TOTK)/runtime/present_clock.h $(TOTK)/runtime/fps_auto_runtime.h
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 fpshybridtest: $(OUT)/fpshybridtest
@@ -479,7 +485,7 @@ $(OUT)/fps60patchtest: $(TOTK)/runtime/test_v143_fps60_patch_table.c $(TOTK)/run
 	$(CC) $(HOSTTEST_FLAGS) -DTOTK_GAME_V143=1 -I$(TOTK)/android/compat/include -include $(TOTK)/android/compat/include/darwin_compat.h \
 	  -I$(TOTK)/third_party/d2r_gfx/host -I$(TOTK)/runtime -o $@ $< -lm -lpthread
 fpsautoscenetest: $(OUT)/fpsautoscenetest
-$(OUT)/fpsautoscenetest: $(TOTK)/android/gfx/test_fps_auto_scene.c $(TOTK)/android/gfx/fps_auto_scene.h $(TOTK)/android/gfx/fps_auto.h
+$(OUT)/fpsautoscenetest: $(TOTK)/android/gfx/test_fps_auto_scene.c $(TOTK)/android/gfx/fps_auto_scene.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/fps_auto.h
 	@mkdir -p $(dir $@)
 	$(CC) $(HOSTTEST_FLAGS) -o $@ $<
 fpsautoblocktest: $(OUT)/fpsautoblocktest
@@ -509,7 +515,7 @@ $(OUT)/vkdrawtest-app: $(TOTK)/android/gfx/test_vkdraw.c $(TOTK)/android/gfx/tes
 	@echo "built $@"
 # Isolated native overlay/presenter pixel tests; run fresh processes for each startup environment.
 vktest-overlay: $(OUT)/vkoverlaytest
-$(OUT)/vkoverlaytest: $(TOTK)/android/gfx/test_vkoverlay.c $(VKTEST_SRC) $(TOTK)/runtime/build_kind.h $(DEV_BUILD_STAMP)
+$(OUT)/vkoverlaytest: $(TOTK)/android/gfx/test_vkoverlay.c $(VKTEST_SRC) $(TOTK)/runtime/build_kind.h $(DEV_BUILD_STAMP) $(TOTK)/android/gfx/vk_ovl_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) $(VKTEST_FLAGS) -O2 -DTOTK_GAME_V143=1 -DTOTK_DEV_BUILD=$(DEV_BUILD) -DTOTK_ANDROID_APP -I$(TOTK)/android/gfx/test_shim -o $@ $(filter %.c,$^) $(VKTEST_LIBS)
 	@echo "built $@"
@@ -546,11 +552,11 @@ $(OUT)/framegenadaptivepresenttest: $(TOTK)/android/gfx/test_framegen_adaptive_p
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $<
 	@echo "built $@"
 framegenadaptiveslottest: $(OUT)/framegenadaptiveslottest
-$(OUT)/framegenadaptiveslottest: $(TOTK)/android/gfx/test_framegen_adaptive_slots.c $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/android/gfx/framegen_adaptive.h
+$(OUT)/framegenadaptiveslottest: $(TOTK)/android/gfx/test_framegen_adaptive_slots.c $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/framegen_adaptive.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $< -lm
 framegenadaptivelatchtest: $(OUT)/framegenadaptivelatchtest
-$(OUT)/framegenadaptivelatchtest: $(TOTK)/android/gfx/test_framegen_adaptive_latch.c $(TOTK)/android/gfx/framegen_adaptive_latch.h $(TOTK)/android/gfx/framegen_adaptive_defaults.h $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/android/gfx/framegen_adaptive_present.h $(TOTK)/runtime/present_timeline.h
+$(OUT)/framegenadaptivelatchtest: $(TOTK)/android/gfx/test_framegen_adaptive_latch.c $(TOTK)/android/gfx/framegen_adaptive_latch.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/framegen_adaptive_defaults.h $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/android/gfx/framegen_adaptive_present.h $(TOTK)/runtime/present_timeline.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $< -lm
 adaptiveslotclocktest: $(OUT)/adaptiveslotclocktest
@@ -558,7 +564,7 @@ $(OUT)/adaptiveslotclocktest: $(TOTK)/android/gfx/test_adaptive_slot_clock.c $(T
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $<
 framegenadaptivepublicationtest: $(OUT)/framegenadaptivepublicationtest
-$(OUT)/framegenadaptivepublicationtest: $(TOTK)/android/gfx/test_framegen_adaptive_publication.c $(TOTK)/android/gfx/framegen_adaptive_publication.h $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/runtime/present_clock.h
+$(OUT)/framegenadaptivepublicationtest: $(TOTK)/android/gfx/test_framegen_adaptive_publication.c $(TOTK)/android/gfx/framegen_adaptive_publication.h $(TOTK)/android/gfx/vk_pace_fast.h $(TOTK)/android/gfx/framegen_adaptive_slots.h $(TOTK)/runtime/present_clock.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $<
 framegenqcompreparedtest: $(OUT)/framegenqcompreparedtest
@@ -567,7 +573,7 @@ $(OUT)/framegenqcompreparedtest: $(TOTK)/android/gfx/test_framegen_qcom_prepared
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $< -lm
 framegenslottest: $(OUT)/presentslottest
 framegendeptest: $(OUT)/framegendeptest
-$(OUT)/framegendeptest: $(TOTK)/../../tests/test_framegen_dependencies.c $(TOTK)/android/gfx/framegen_dependencies.h $(TOTK)/android/gfx/framegen_passes.h $(TOTK)/android/gfx/vk_canvas.c $(TOTK)/android/gfx/vk_canvas.h
+$(OUT)/framegendeptest: $(TOTK)/../../tests/test_framegen_dependencies.c $(TOTK)/android/gfx/framegen_dependencies.h $(TOTK)/android/gfx/framegen_passes.h $(TOTK)/android/gfx/vk_canvas.c $(TOTK)/android/gfx/vk_canvas.h $(TOTK)/android/gfx/vk_canvas_fast.h
 	@mkdir -p $(dir $@)
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -o $@ $(filter %.c,$^)
 	@echo "built $@"
@@ -619,6 +625,7 @@ clean:
 	rm -f $(OUT)/texelregiontest
 	rm -f $(OUT)/vkcanvastest
 	rm -f $(OUT)/poolfintest
+	rm -f $(OUT)/ktglopttest
 	rm -f $(VKTEST_FRONTEND) $(VKTEST_FRONTEND:.o=.d)
 .PHONY: all clean vkprobe vktest vktest-app threadplacetest frametimelinetest framefencetest acquireclocktest displaypacetest displayclocktest acquireslacktest predictpacetest predictbudgettest adrenogmemtest fpsautotest fpsautoscenetest fpsautoblocktest presentfencetest vktest-overlay vkposttest companiontest FORCE psotracetest
 .PHONY: framegenslottest presentslottest vkframegentest framegenmathtest framegenbudgettest framegendeptest gpuitimingtest
@@ -629,7 +636,7 @@ clean:
 .PHONY: vktest-native-ui
 .PHONY: poolfintest
 .PHONY: vkpipetest screenclassifytest
-.PHONY: vksubgrouptest
+.PHONY: vksubgrouptest ktglopttest
 
 # The on-device setup library (libtotk_setup.so, the hactool executable libhactool.so, host totk-setup): targets
 # setup-android / setup-host; it needs HACTOOL_SRC and the capstone prefixes from the setup deps helpers
